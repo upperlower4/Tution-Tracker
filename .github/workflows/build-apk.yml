@@ -1,0 +1,75 @@
+name: Build Android APK
+
+on:
+  # শুধুমাত্র আপনি চাইলে তখনই build হবে (push এ build হবে না)
+  workflow_dispatch:
+    inputs:
+      apk_name:
+        description: 'APK File Name (optional)'
+        required: false
+        default: 'TuitionTracker'
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(cat package.json | grep '"version"' | head -1 | awk -F: '{ print $2 }' | sed 's/[",]//g' | tr -d '[[:space:]]')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Update Android app version
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          VERSION_CODE=$(echo $VERSION | tr -d '.')
+          sed -i "s/versionCode 1/versionCode $VERSION_CODE/g" android/app/build.gradle
+          sed -i "s/versionName \"1.0\"/versionName \"$VERSION\"/g" android/app/build.gradle
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build APK
+        run: |
+          cd android
+          ./gradlew assembleDebug
+
+      - name: Rename APK with custom name
+        run: |
+          APK_NAME="${{ github.event.inputs.apk_name }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          cd android/app/build/outputs/apk/debug
+          mv app-debug.apk ${APK_NAME}-v${VERSION}.apk
+          echo "APK renamed to: ${APK_NAME}-v${VERSION}.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.apk_name }}-v${{ steps.version.outputs.version }}
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 90
