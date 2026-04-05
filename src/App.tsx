@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Plus, Users, Calendar, DollarSign, Search, ChevronRight, Phone, MessageCircle, Clock,
   Trash2, CreditCard, BarChart3, ArrowLeft, UserPlus, Pencil, GraduationCap, TrendingUp,
@@ -70,6 +70,101 @@ const StepIndicator = ({ current, total }: { current: number; total: number }) =
   </div>
 );
 
+// ─── Date Input (3-field) ─────────────────────────────────────────────────────
+const DateInput = ({ value, onChange, label }: { value: string; onChange: (val: string) => void; label: string }) => {
+  // value is expected to be YYYY-MM-DD
+  const parts = value.split('-');
+  const initialY = parts[0] || new Date().getFullYear().toString();
+  const initialM = parts[1] || (new Date().getMonth() + 1).toString().padStart(2, '0');
+  const initialD = parts[2] || new Date().getDate().toString().padStart(2, '0');
+
+  const [dd, setDd] = useState(parseInt(initialD).toString());
+  const [mm, setMm] = useState(initialM);
+  const [yyyy, setYyyy] = useState(initialY);
+
+  // Sync local state when value prop changes externally
+  useEffect(() => {
+    const p = value.split('-');
+    if (p.length === 3) {
+      setDd(parseInt(p[2]).toString());
+      setMm(p[1]);
+      setYyyy(p[0]);
+    }
+  }, [value]);
+
+  const handleDateChange = (d: string, m: string, y: string) => {
+    const cleanD = d === '' ? '01' : d.padStart(2, '0');
+    const cleanY = y === '' ? new Date().getFullYear().toString() : y;
+    const isoString = `${cleanY}-${m}-${cleanD}`;
+    onChange(isoString);
+  };
+
+  const months = [
+    { v: '01', l: 'Jan' }, { v: '02', l: 'Feb' }, { v: '03', l: 'Mar' },
+    { v: '04', l: 'Apr' }, { v: '05', l: 'May' }, { v: '06', l: 'Jun' },
+    { v: '07', l: 'Jul' }, { v: '08', l: 'Aug' }, { v: '09', l: 'Sep' },
+    { v: '10', l: 'Oct' }, { v: '11', l: 'Nov' }, { v: '12', l: 'Dec' }
+  ];
+
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{label}</label>
+      <div className="grid grid-cols-3 gap-2">
+        <input
+          type="text"
+          inputMode="numeric"
+          placeholder="DD"
+          value={dd}
+          onChange={(e) => {
+            let val = e.target.value.replace(/\D/g, '');
+            if (val.length > 2) val = val.slice(-2);
+            if (val !== '' && parseInt(val) > 31) val = '31';
+            setDd(val);
+            handleDateChange(val, mm, yyyy);
+          }}
+          onBlur={() => {
+            if (dd === '' || parseInt(dd) === 0) {
+              setDd('1');
+              handleDateChange('1', mm, yyyy);
+            }
+          }}
+          className="bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold dark:text-gray-100 text-center"
+        />
+        <select
+          value={mm}
+          onChange={(e) => {
+            setMm(e.target.value);
+            handleDateChange(dd, e.target.value, yyyy);
+          }}
+          className="bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold appearance-none dark:text-gray-100 text-center"
+        >
+          {months.map(mon => <option key={mon.v} value={mon.v}>{mon.l}</option>)}
+        </select>
+        <input
+          type="text"
+          inputMode="numeric"
+          placeholder="YYYY"
+          value={yyyy}
+          onChange={(e) => {
+            let val = e.target.value.replace(/\D/g, '');
+            if (val.length > 4) val = val.slice(0, 4);
+            setYyyy(val);
+            handleDateChange(dd, mm, val);
+          }}
+          onBlur={() => {
+            if (yyyy.length < 4) {
+              const currentYear = new Date().getFullYear().toString();
+              setYyyy(currentYear);
+              handleDateChange(dd, mm, currentYear);
+            }
+          }}
+          className="bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold dark:text-gray-100 text-center"
+        />
+      </div>
+    </div>
+  );
+};
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 interface StudentFormData {
   name: string; className: string; joinDate: string; batchId: string;
@@ -121,6 +216,9 @@ export default function App() {
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [exitToast, setExitToast] = useState(false);
   const [showBackupConfirm, setShowBackupConfirm] = useState(false);
+  const [showImportConfirm, setShowImportConfirm] = useState(false);
+  const [showImportError, setShowImportError] = useState<string | null>(null);
+  const [pendingImportData, setPendingImportData] = useState<any>(null);
   const [backupFilename, setBackupFilename] = useState('');
 
   // ─── Transaction State ────────────────────────────────────────────
@@ -170,6 +268,8 @@ export default function App() {
     if (showAppInfo) { setShowAppInfo(false); return; }
     if (showDevInfo) { setShowDevInfo(false); return; }
     if (showBackupConfirm) { setShowBackupConfirm(false); return; }
+    if (showImportConfirm) { setShowImportConfirm(false); return; }
+    if (showImportError) { setShowImportError(null); return; }
 
     if (view === 'add') {
       if (addStudentStep > 1) { setAddStudentStep(s => s - 1); return; }
@@ -300,7 +400,14 @@ export default function App() {
     const monthStr = format(new Date(), 'MMMM_yyyy');
     const filename = `TutionPro_${monthStr}_Report.json`;
     setBackupFilename(filename);
-    const data = { students, batches, version: '1.0', timestamp: new Date().toISOString() };
+    const data = { 
+      students, 
+      batches, 
+      userProfile, 
+      customClasses, 
+      version: '1.0', 
+      timestamp: new Date().toISOString() 
+    };
     const dataStr = JSON.stringify(data, null, 2);
     const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
     const a = document.createElement('a');
@@ -331,15 +438,38 @@ export default function App() {
       try {
         const data = JSON.parse(event.target?.result as string);
         if (data.students && data.batches) {
-          if (confirm('This will replace all your current data with the backup. Continue?')) {
-            localStorage.setItem('tution_tracker_data', JSON.stringify(data.students));
-            localStorage.setItem('tution_tracker_batches', JSON.stringify(data.batches));
-            window.location.reload();
-          }
-        } else { alert('Invalid backup file format.'); }
-      } catch { alert('Failed to read backup file.'); }
+          setPendingImportData(data);
+          setShowImportConfirm(true);
+        } else {
+          setShowImportError('Invalid backup file format. Missing students or batches data.');
+        }
+      } catch (err) {
+        setShowImportError('Failed to read backup file. Please ensure it is a valid JSON file.');
+      }
+      // Reset input value so the same file can be uploaded again if needed
+      e.target.value = '';
     };
     reader.readAsText(file);
+  };
+
+  const executeImport = () => {
+    if (!pendingImportData) return;
+    try {
+      localStorage.setItem('tution_tracker_data', JSON.stringify(pendingImportData.students));
+      localStorage.setItem('tution_tracker_batches', JSON.stringify(pendingImportData.batches));
+      
+      // Also restore profile and classes if present
+      if (pendingImportData.userProfile) {
+        localStorage.setItem('tution_user_profile_v4', JSON.stringify(pendingImportData.userProfile));
+      }
+      if (pendingImportData.customClasses) {
+        localStorage.setItem('tution_classes_v4', JSON.stringify(pendingImportData.customClasses));
+      }
+      
+      window.location.reload();
+    } catch (err) {
+      setShowImportError('Failed to save imported data to storage.');
+    }
   };
 
   // ─── Student Form Submit ──────────────────────────────────────────
@@ -409,7 +539,7 @@ export default function App() {
       <div className="min-h-screen bg-[#F8F9FA] dark:bg-[#0F1115] flex items-center justify-center p-6 font-sans">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
           className="w-full max-w-md bg-white dark:bg-[#1A1D23] rounded-[2.5rem] p-8 shadow-2xl shadow-indigo-100/50 dark:shadow-none border border-gray-100 dark:border-gray-800">
-          <div className="w-16 h-16 bg-indigo-600 rounded-[1.5rem] flex items-center justify-center text-white mb-6 shadow-xl shadow-indigo-200 dark:shadow-none overflow-hidden">
+          <div className="w-16 h-16 flex items-center justify-center text-white mb-6 overflow-hidden">
             <img src="/logo.png" alt="Tution Pro" className="w-full h-full object-contain" onError={(e) => { (e.target as any).style.display='none'; }} />
             <GraduationCap size={32} />
           </div>
@@ -442,7 +572,7 @@ export default function App() {
       <header className="bg-white/80 backdrop-blur-3xl border-b border-gray-100/50 sticky top-0 z-40 dark:bg-[#0F1115]/80 dark:border-gray-800/50">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5 cursor-pointer group" onClick={() => { setActiveTab('dashboard'); setView('main'); }}>
-            <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200/60 dark:shadow-none group-hover:scale-105 transition-transform shrink-0 overflow-hidden">
+            <div className="w-9 h-9 flex items-center justify-center text-white group-hover:scale-105 transition-transform shrink-0 overflow-hidden">
               <img src="/logo.png" alt="Tution Pro" className="w-full h-full object-contain p-1" onError={(e) => { (e.target as any).style.display='none'; (e.target as any).nextSibling.style.display='block'; }} />
               <GraduationCap size={18} style={{ display: 'none' }} />
             </div>
@@ -487,19 +617,19 @@ export default function App() {
               {/* Stats */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 {[
-                  { label: 'Monthly Target', value: `৳${students.filter(s => s.status === 'active' && s.salaryType === 'fixed').reduce((a, s) => a + s.monthlyFee, 0).toLocaleString()}`, color: 'text-white', bg: 'bg-indigo-600', icon: <TrendingUp className="w-4 h-4" />, sub: format(new Date(), 'MMM') + ' target' },
+                  { label: 'Monthly Target', value: `৳${students.filter(s => s.status === 'active' && s.salaryType === 'fixed').reduce((a, s) => a + s.monthlyFee, 0).toLocaleString()}`, color: 'text-black dark:text-white', bg: 'bg-[#4e38f6] dark:bg-[#4e38f6]', icon: <TrendingUp className="w-4 h-4" />, sub: format(new Date(), 'MMM') + ' target' },
                   { label: 'Collected', value: `৳${students.reduce((a, s) => a + s.payments.filter(p => { const d = parseISO(p.date); return d.getMonth() === new Date().getMonth() && d.getFullYear() === new Date().getFullYear(); }).reduce((pa, p) => pa + p.amountPaid, 0), 0).toLocaleString()}`, color: 'text-emerald-600', bg: 'bg-white', icon: <DollarSign className="w-4 h-4" />, sub: 'This month' },
                   { label: 'Total Dues', value: `৳${students.filter(s => s.status === 'active').reduce((a, s) => a + getStudentFinancials(s).dues, 0).toLocaleString()}`, color: 'text-rose-600', bg: 'bg-white', icon: <AlertCircle className="w-4 h-4" />, sub: 'Pending' },
                   { label: 'New Students', value: students.filter(s => { const d = parseISO(s.joinDate); return d.getMonth() === new Date().getMonth() && d.getFullYear() === new Date().getFullYear(); }).length, color: 'text-indigo-600', bg: 'bg-white', icon: <UserPlus className="w-4 h-4" />, sub: 'This month' }
                 ].map((stat, i) => (
                   <Card key={i} className={cn("p-4 border-none rounded-[1.25rem] flex flex-col justify-between min-h-[100px]", stat.bg === 'bg-white' ? "bg-white dark:bg-[#1A1D23] dark:border-gray-800/80" : stat.bg)}>
                     <div className="flex items-center justify-between mb-2">
-                      <div className={cn("p-1.5 rounded-lg", stat.bg === 'bg-indigo-600' ? "bg-white/10 text-white" : "bg-gray-50 dark:bg-gray-800 " + stat.color)}>{stat.icon}</div>
-                      <p className={cn("text-[9px] font-black uppercase tracking-widest", stat.bg === 'bg-indigo-600' ? "text-indigo-100" : "text-gray-400 dark:text-gray-500")}>{stat.label}</p>
+                      <div className={cn("p-1.5 rounded-lg", i === 0 ? "bg-white/10 " + stat.color : "bg-gray-50 dark:bg-gray-800 " + stat.color)}>{stat.icon}</div>
+                      <p className={cn("text-[9px] font-black uppercase tracking-widest", i === 0 ? "text-indigo-100" : "text-gray-400 dark:text-gray-500")}>{stat.label}</p>
                     </div>
                     <div>
-                      <h3 className={cn("text-lg sm:text-xl font-black tracking-tighter mb-0.5", stat.bg === 'bg-indigo-600' ? "text-white" : (darkMode ? "text-gray-100" : stat.color))}>{stat.value}</h3>
-                      <p className={cn("text-[9px] font-bold uppercase tracking-wider opacity-60", stat.bg === 'bg-indigo-600' ? "text-white" : "text-gray-500 dark:text-gray-400")}>{stat.sub}</p>
+                      <h3 className={cn("text-lg sm:text-xl font-black tracking-tighter mb-0.5", i === 0 ? "text-white" : (darkMode ? "text-gray-100" : stat.color))}>{stat.value}</h3>
+                      <p className={cn("text-[9px] font-bold uppercase tracking-wider opacity-60", i === 0 ? "text-white" : "text-gray-500 dark:text-gray-400")}>{stat.sub}</p>
                     </div>
                   </Card>
                 ))}
@@ -655,10 +785,11 @@ export default function App() {
                         {classesToUse.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Join Date *</label>
-                      <input type="date" value={studentForm.joinDate} onChange={e => setStudentForm(p => ({ ...p, joinDate: e.target.value }))} className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold dark:text-gray-100" />
-                    </div>
+                    <DateInput 
+                      label="Join Date *" 
+                      value={studentForm.joinDate} 
+                      onChange={val => setStudentForm(p => ({ ...p, joinDate: val }))} 
+                    />
                   </motion.div>
                 )}
 
@@ -801,9 +932,12 @@ export default function App() {
                 </div>
                 <form onSubmit={(e) => {
                   e.preventDefault();
+                  if (isSubmitting) return;
+                  setIsSubmitting(true);
                   const fd = new FormData(e.currentTarget);
                   addPayment(selectedStudent.id, Number(fd.get('amount')), fd.get('month') as string, fd.get('note') as string);
                   e.currentTarget.reset();
+                  setIsSubmitting(false);
                 }} className="grid grid-cols-2 gap-3">
                   <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Amount (৳)</label><input name="amount" type="number" required className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold dark:text-gray-100" placeholder="0" /></div>
                   <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Month</label>
@@ -812,7 +946,7 @@ export default function App() {
                     </select>
                   </div>
                   <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Note</label><input name="note" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl p-3 outline-none font-bold dark:text-gray-100" placeholder="Optional" /></div>
-                  <div className="flex items-end"><button type="submit" className="w-full bg-indigo-600 text-white py-3 rounded-xl font-black text-sm hover:bg-indigo-700 transition-all active:scale-[0.97] flex items-center justify-center gap-1.5"><Check size={16} />Pay</button></div>
+                  <div className="flex items-end"><button type="submit" disabled={isSubmitting} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-black text-sm hover:bg-indigo-700 transition-all active:scale-[0.97] flex items-center justify-center gap-1.5 disabled:opacity-50"><Check size={16} />{isSubmitting ? '...' : 'Pay'}</button></div>
                 </form>
               </div>
 
@@ -856,7 +990,7 @@ export default function App() {
                       <p className="text-gray-400 text-center mb-6 text-sm font-medium">Student will be archived. Payment history preserved.</p>
                       <div className="grid grid-cols-2 gap-3">
                         <button onClick={() => setShowDeleteModal(false)} className="py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
-                        <button onClick={() => { archiveStudent(selectedStudent.id); setShowDeleteModal(false); setView('main'); }} className="py-3.5 bg-rose-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest">Archive</button>
+                        <button disabled={isSubmitting} onClick={() => { if (isSubmitting) return; setIsSubmitting(true); archiveStudent(selectedStudent.id); setShowDeleteModal(false); setView('main'); setIsSubmitting(false); }} className="py-3.5 bg-rose-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest disabled:opacity-50">Archive</button>
                       </div>
                     </motion.div>
                   </div>
@@ -866,11 +1000,14 @@ export default function App() {
                     <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="bg-white dark:bg-gray-900 rounded-[2rem] p-7 max-w-sm w-full shadow-2xl border border-gray-100 dark:border-gray-800">
                       <div className="w-14 h-14 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 rounded-2xl flex items-center justify-center mb-4 mx-auto"><UserPlus size={26} /></div>
                       <h3 className="text-xl font-black text-center mb-2 dark:text-gray-100">Restore Student?</h3>
-                      <p className="text-gray-400 text-center mb-4 text-sm font-medium">Pick a new join date to restart billing.</p>
-                      <input type="date" value={restoreDate} onChange={e => setRestoreDate(e.target.value)} className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none font-bold dark:text-gray-100 mb-4" />
+                      <DateInput 
+                        label="New Join Date" 
+                        value={restoreDate} 
+                        onChange={setRestoreDate} 
+                      />
                       <div className="grid grid-cols-2 gap-3">
                         <button onClick={() => setRestoringStudentId(null)} className="py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
-                        <button onClick={() => { restoreStudent(restoringStudentId, new Date(restoreDate).toISOString()); setRestoringStudentId(null); setView('main'); setShowArchived(false); }} className="py-3.5 bg-emerald-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest">Restore</button>
+                        <button disabled={isSubmitting} onClick={() => { if (isSubmitting) return; setIsSubmitting(true); restoreStudent(restoringStudentId, new Date(restoreDate).toISOString()); setRestoringStudentId(null); setView('main'); setShowArchived(false); setIsSubmitting(false); }} className="py-3.5 bg-emerald-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest disabled:opacity-50">Restore</button>
                       </div>
                     </motion.div>
                   </div>
@@ -1092,8 +1229,18 @@ export default function App() {
                     <button onClick={async () => {
                       if (!notificationsEnabled) {
                         const g = await requestNotificationPermission();
-                        if (g) { setNotificationsEnabled(true); setNotificationPermission(true); localStorage.setItem('tution_notifications_enabled', 'true'); await schedulePaymentReminders(students); }
-                      } else { setNotificationsEnabled(false); localStorage.setItem('tution_notifications_enabled', 'false'); }
+                        if (g) { 
+                          setNotificationsEnabled(true); 
+                          setNotificationPermission(true); 
+                          localStorage.setItem('tution_notifications_enabled', 'true'); 
+                          await schedulePaymentReminders(students); 
+                        } else {
+                          alert('Notification permission was denied. Please enable it in your device or browser settings to receive reminders.');
+                        }
+                      } else { 
+                        setNotificationsEnabled(false); 
+                        localStorage.setItem('tution_notifications_enabled', 'false'); 
+                      }
                     }} className={cn("w-12 h-6 rounded-full transition-all relative shrink-0", notificationsEnabled ? "bg-indigo-600" : "bg-gray-300 dark:bg-gray-700")}>
                       <div className={cn("w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all shadow", notificationsEnabled ? "left-6" : "left-0.5")} />
                     </button>
@@ -1165,7 +1312,7 @@ export default function App() {
                   </button>
                   <div className="settings-divider" />
                   <button onClick={() => setShowDevInfo(true)} className="settings-row w-full">
-                    <div className="flex items-center gap-3"><User size={18} className="text-purple-500" /><div><p className="font-bold text-sm dark:text-gray-100">Developer</p><p className="text-[10px] text-gray-400 font-medium">Joy Krishna Malakar</p></div></div>
+                    <div className="flex items-center gap-3"><User size={18} className="text-purple-500" /><div className="text-left"><p className="font-bold text-sm dark:text-gray-100">Developer</p><p className="text-[10px] text-gray-400 font-medium">Joym Krishna Malakar</p></div></div>
                     <ChevronRight size={16} className="text-gray-300 dark:text-gray-600" />
                   </button>
                   <div className="settings-divider" />
@@ -1181,7 +1328,7 @@ export default function App() {
                 <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 px-1">Danger Zone</p>
                 <div className="settings-section">
                   <button onClick={() => setShowResetWarning(true)} className="settings-row w-full">
-                    <div className="flex items-center gap-3"><Trash2 size={18} className="text-rose-500" /><div><p className="font-bold text-sm text-rose-500">Reset All Data</p><p className="text-[10px] text-gray-400 font-medium">Permanently delete everything</p></div></div>
+                    <div className="flex items-center gap-3"><Trash2 size={18} className="text-rose-500" /><div className="text-left"><p className="font-bold text-sm text-rose-500">Reset All Data</p><p className="text-[10px] text-gray-400 font-medium">Permanently delete everything</p></div></div>
                     <ChevronRight size={16} className="text-rose-300" />
                   </button>
                 </div>
@@ -1287,7 +1434,7 @@ export default function App() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <button onClick={() => setShowEditPayment(false)} className="py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
-                <button onClick={handleSaveEditPayment} className="py-3.5 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest">Save</button>
+                <button disabled={isSubmitting} onClick={() => { if (isSubmitting) return; setIsSubmitting(true); handleSaveEditPayment(); setIsSubmitting(false); }} className="py-3.5 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest disabled:opacity-50">Save</button>
               </div>
             </motion.div>
           </>
@@ -1306,8 +1453,43 @@ export default function App() {
               <p className="text-gray-400 text-sm font-medium mb-6">This will permanently remove ৳{selectedPayment?.payment.amountPaid.toLocaleString()} payment. This cannot be undone.</p>
               <div className="grid grid-cols-2 gap-3">
                 <button onClick={() => setShowDeletePayment(false)} className="py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
-                <button onClick={handleDeletePaymentConfirm} className="py-3.5 bg-rose-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest">Delete</button>
+                <button disabled={isSubmitting} onClick={() => { if (isSubmitting) return; setIsSubmitting(true); handleDeletePaymentConfirm(); setIsSubmitting(false); }} className="py-3.5 bg-rose-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest disabled:opacity-50">Delete</button>
               </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* ─── Import Confirm Modal ─── */}
+      <AnimatePresence>
+        {showImportConfirm && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowImportConfirm(false)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]" />
+            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-sm bg-white dark:bg-gray-900 rounded-[2rem] p-7 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800 text-center">
+              <div className="w-14 h-14 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 rounded-2xl flex items-center justify-center mb-4 mx-auto"><Upload size={28} /></div>
+              <h3 className="text-xl font-black mb-2 dark:text-gray-100">Restore Data?</h3>
+              <p className="text-gray-400 text-sm font-medium mb-6">This will replace all your current data with the backup. This action cannot be undone.</p>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setShowImportConfirm(false)} className="py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
+                <button onClick={executeImport} className="py-3.5 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest">Yes, Restore</button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* ─── Import Error Modal ─── */}
+      <AnimatePresence>
+        {showImportError && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowImportError(null)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]" />
+            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-sm bg-white dark:bg-gray-900 rounded-[2rem] p-7 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800 text-center">
+              <div className="w-14 h-14 bg-rose-50 dark:bg-rose-900/20 text-rose-600 rounded-2xl flex items-center justify-center mb-4 mx-auto"><AlertCircle size={28} /></div>
+              <h3 className="text-xl font-black mb-2 dark:text-gray-100">Import Failed</h3>
+              <p className="text-gray-400 text-sm font-medium mb-6">{showImportError}</p>
+              <button onClick={() => setShowImportError(null)} className="w-full py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Close</button>
             </motion.div>
           </>
         )}
@@ -1394,7 +1576,7 @@ export default function App() {
               className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-sm bg-white dark:bg-gray-900 rounded-[2.5rem] p-7 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800">
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-indigo-200/50 dark:shadow-none overflow-hidden">
+                  <div className="w-12 h-12 flex items-center justify-center text-white overflow-hidden">
                     <img src="/logo.png" alt="Tution Pro" className="w-full h-full object-contain p-1" onError={(e) => { (e.target as any).style.display='none'; }} />
                     <GraduationCap size={22} />
                   </div>
@@ -1425,8 +1607,8 @@ export default function App() {
               className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-sm bg-white dark:bg-gray-900 rounded-[2.5rem] p-7 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800 text-center">
               <button onClick={() => setShowDevInfo(false)} className="absolute top-5 right-5 p-2 bg-gray-50 dark:bg-gray-800 rounded-xl"><X size={16} className="text-gray-400" /></button>
               <div className="w-20 h-20 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-[1.5rem] flex items-center justify-center text-white text-2xl font-black mx-auto mb-4 shadow-xl shadow-purple-200/50 dark:shadow-none">JM</div>
-              <h3 className="text-xl font-black mb-0.5 dark:text-gray-100">Joy Krishna Malakar</h3>
-              <p className="text-purple-600 dark:text-purple-400 font-black text-[10px] uppercase tracking-widest mb-3">Lead Developer</p>
+              <h3 className="text-xl font-black mb-0.5 dark:text-gray-100">Joym Krishna Malakar</h3>
+              <p className="text-purple-600 dark:text-purple-400 font-black text-[10px] uppercase tracking-widest mb-3">Learner</p>
               <p className="text-gray-400 text-sm font-medium mb-2 leading-relaxed">Currently studying Computer Science & Engineering at Sylhet Polytechnic Institute.</p>
               <div className="flex flex-col gap-2.5 mt-5">
                 <a href="mailto:joymkrishna@gmail.com" className="flex items-center justify-center gap-2 bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest"><FileText size={16} />Email Me</a>

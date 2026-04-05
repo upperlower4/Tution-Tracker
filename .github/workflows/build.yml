@@ -30,8 +30,8 @@ jobs:
           
           cat <<EOF > capacitor.config.json
           {
-            "appId": "com.joymkrishna.tuitiontracker.app",
-            "appName": "TuitionTracker",
+            "appId": "com.joymkrishna.tutionpro.app",
+            "appName": "TuitionPro",
             "webDir": "dist",
             "server": {
               "androidScheme": "https",

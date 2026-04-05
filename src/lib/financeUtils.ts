@@ -4,19 +4,20 @@ import { Student, Payment } from '../types';
 export const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export const calculateBillingMonths = (student: Student) => {
-  const joinDate = startOfDay(parseISO(student.joinDate));
-  const today = startOfDay(new Date());
+  const joinDate = startOfMonth(parseISO(student.joinDate));
+  const today = startOfMonth(new Date());
   
   // If student is archived, we stop calculating dues at the archived date
   const endDate = student.status === 'inactive' && student.archivedDate 
-    ? startOfDay(parseISO(student.archivedDate)) 
+    ? startOfMonth(parseISO(student.archivedDate)) 
     : today;
   
   const dueMonths = [];
   let currentMonth = joinDate;
 
-  // Loop through each month from joinDate until the month before the end date
-  while (addMonths(currentMonth, 1) <= endDate) {
+  // Loop through each month from joinDate until the end date (inclusive)
+  // This ensures the current month is counted as a due month.
+  while (currentMonth <= endDate) {
     dueMonths.push(new Date(currentMonth));
     currentMonth = addMonths(currentMonth, 1);
   }
@@ -26,7 +27,6 @@ export const calculateBillingMonths = (student: Student) => {
   let nextToPay = allMonths.length > 0 ? addMonths(allMonths[allMonths.length - 1], 1) : joinDate;
   
   // Add months until we cover at least one month ahead of today for advance payment options
-  // Even for archived students, we might want to see the months they were active
   while (nextToPay <= addMonths(today, 1)) {
     allMonths.push(new Date(nextToPay));
     nextToPay = addMonths(nextToPay, 1);
@@ -54,12 +54,20 @@ export const getStudentFinancials = (student: Student) => {
   const dues = balance < 0 ? Math.abs(balance) : 0;
   const advance = balance > 0 ? balance : 0;
 
+  // Filter billingMonths to only show those not fully paid
+  // A month is considered "paid" if the totalPaid covers the cumulative expected amount up to that month
+  const filteredBillingMonths = allMonths.filter((m, index) => {
+    if (student.salaryType !== 'fixed') return true;
+    const cumulativeExpected = (student.legacyExpected || 0) + ((index + 1) * student.monthlyFee);
+    return totalPaid < cumulativeExpected;
+  });
+
   return {
     totalPaid,
     totalExpected,
     balance,
     dues,
     advance,
-    billingMonths: allMonths // Use allMonths for the payment dropdown
+    billingMonths: filteredBillingMonths.length > 0 ? filteredBillingMonths : [allMonths[allMonths.length - 1]] // Fallback to last month if all paid
   };
 };

@@ -39,7 +39,4 @@ export interface Student {
 
 export interface AppState {
   students: Student[];
-  batches: Batch[];
-  version: string;
-  timestamp: string;
 }

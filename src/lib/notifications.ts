@@ -1,155 +1,142 @@
-import { Student } from '../types';
-import { getStudentFinancials } from './financeUtils';
+import { LocalNotifications } from '@capacitor/local-notifications';
+import { Capacitor } from '@capacitor/core';
 
-// Safe Capacitor plugin loader — won't crash in browser/web
-async function getLocalNotifications() {
-  try {
-    const { LocalNotifications } = await import('@capacitor/local-notifications');
-    return LocalNotifications;
-  } catch {
-    return null;
+/**
+ * Request notification permissions from the user.
+ * Returns true if granted, false otherwise.
+ */
+export const requestNotificationPermission = async (): Promise<boolean> => {
+  console.log('Notifications: Requesting permission...');
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const permission = await LocalNotifications.requestPermissions();
+      console.log('Notifications: Native permission result:', permission.display);
+      return permission.display === 'granted';
+    } catch (error) {
+      console.error('Error requesting notification permissions:', error);
+      return false;
+    }
+  } else {
+    // Web Fallback
+    if (!('Notification' in window)) {
+      console.warn('Notifications: This browser does not support desktop notifications.');
+      return false;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      console.log('Notifications: Web permission result:', permission);
+      return permission === 'granted';
+    } catch (error) {
+      console.error('Error requesting web notification permissions:', error);
+      return false;
+    }
   }
-}
+};
 
-export async function requestNotificationPermission(): Promise<boolean> {
-  try {
-    const plugin = await getLocalNotifications();
-    if (!plugin) return false;
-    const result = await plugin.requestPermissions();
-    return result.display === 'granted';
-  } catch {
-    return false;
+/**
+ * Check the current notification permission status.
+ */
+export const checkNotificationPermission = async (): Promise<boolean> => {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const permission = await LocalNotifications.checkPermissions();
+      return permission.display === 'granted';
+    } catch (error) {
+      console.error('Error checking notification permissions:', error);
+      return false;
+    }
+  } else {
+    // Web Fallback
+    if (!('Notification' in window)) return false;
+    return Notification.permission === 'granted';
   }
-}
+};
 
-export async function checkNotificationPermission(): Promise<boolean> {
-  try {
-    const plugin = await getLocalNotifications();
-    if (!plugin) return false;
-    const result = await plugin.checkPermissions();
-    return result.display === 'granted';
-  } catch {
-    return false;
+/**
+ * Schedule payment reminders for active students.
+ * This is a placeholder implementation that can be expanded with real logic.
+ */
+export const schedulePaymentReminders = async (students: any[]): Promise<void> => {
+  console.log('Notifications: Scheduling reminders for', students.length, 'students');
+  if (!Capacitor.isNativePlatform()) {
+    console.log('Notifications: Scheduling is only supported on native platforms.');
+    return;
   }
-}
 
-export async function scheduleNotification(options: {
-  id: number;
-  title: string;
-  body: string;
-  scheduleAt: Date;
-  extra?: any;
-}): Promise<void> {
   try {
-    const plugin = await getLocalNotifications();
-    if (!plugin) return;
-    await plugin.schedule({
-      notifications: [{
-        id: options.id,
-        title: options.title,
-        body: options.body,
-        schedule: { at: options.scheduleAt },
-        extra: options.extra,
-        sound: 'default',
-        smallIcon: 'ic_notification',
-        largeIcon: 'ic_launcher',
-      }],
-    });
+    // Cancel all existing pending notifications to avoid duplicates
+    const pending = await LocalNotifications.getPending();
+    if (pending.notifications.length > 0) {
+      await LocalNotifications.cancel({ notifications: pending.notifications });
+    }
+
+    const activeStudents = students.filter(s => s.status === 'active');
+    
+    // Example: Schedule a reminder for each student for the next month
+    // In a real app, you'd calculate the exact due date.
+    const notifications = activeStudents.slice(0, 10).map((student, index) => ({
+      title: 'Payment Reminder',
+      body: `Monthly tuition fee for ${student.name} is due soon.`,
+      id: index + 100,
+      schedule: { at: new Date(Date.now() + 1000 * 60 * 60 * 24 * (index + 1)) }, // Staggered reminders
+      sound: 'beep.wav',
+    }));
+
+    if (notifications.length > 0) {
+      await LocalNotifications.schedule({ notifications });
+      console.log('Notifications: Scheduled', notifications.length, 'reminders');
+    }
   } catch (error) {
-    console.error('Failed to schedule notification:', error);
+    console.error('Error scheduling payment reminders:', error);
   }
-}
+};
 
-export async function cancelNotification(id: number): Promise<void> {
-  try {
-    const plugin = await getLocalNotifications();
-    if (!plugin) return;
-    await plugin.cancel({ notifications: [{ id }] });
-  } catch {}
-}
-
-export async function cancelAllNotifications(): Promise<void> {
-  try {
-    const plugin = await getLocalNotifications();
-    if (!plugin) return;
-    await plugin.cancel({ notifications: [] });
-  } catch {}
-}
-
-export async function schedulePaymentReminders(students: Student[]): Promise<void> {
-  await cancelAllNotifications();
-  const permissionGranted = await checkNotificationPermission();
-  if (!permissionGranted) return;
-
-  let notificationId = 1;
-  for (const student of students) {
-    if (student.status !== 'active' || student.salaryType !== 'fixed') continue;
-    const financials = getStudentFinancials(student);
-    if (financials.dues > 0) {
-      const tomorrow9AM = new Date();
-      tomorrow9AM.setDate(tomorrow9AM.getDate() + 1);
-      tomorrow9AM.setHours(9, 0, 0, 0);
-      await scheduleNotification({
-        id: notificationId++,
-        title: `Payment Due: ${student.name}`,
-        body: `${student.name} has outstanding dues of ৳${financials.dues.toLocaleString()}`,
-        scheduleAt: tomorrow9AM,
-        extra: { studentId: student.id, type: 'payment_due' },
+/**
+ * Send a test notification immediately.
+ */
+export const sendTestNotification = async (): Promise<void> => {
+  console.log('Notifications: Sending test notification...');
+  if (Capacitor.isNativePlatform()) {
+    try {
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            title: 'Tution Pro Test',
+            body: 'Your notification system is working perfectly!',
+            id: 1,
+            schedule: { at: new Date(Date.now() + 1000) }, // 1 second from now
+            sound: 'beep.wav',
+          }
+        ]
       });
-      if (financials.dues >= student.monthlyFee * 2) {
-        const nextWeek = new Date();
-        nextWeek.setDate(nextWeek.getDate() + 7);
-        nextWeek.setHours(9, 0, 0, 0);
-        await scheduleNotification({
-          id: notificationId++,
-          title: `High Dues Alert: ${student.name}`,
-          body: `${student.name} has 2+ months dues: ৳${financials.dues.toLocaleString()}`,
-          scheduleAt: nextWeek,
-          extra: { studentId: student.id, type: 'high_dues' },
+      console.log('Notifications: Test notification scheduled on native platform');
+    } catch (error) {
+      console.error('Error sending test notification:', error);
+      alert('Failed to send test notification. Please check permissions.');
+    }
+  } else {
+    // Web Fallback
+    if (!('Notification' in window)) {
+      alert('This browser does not support desktop notifications.');
+      return;
+    }
+
+    if (Notification.permission === 'granted') {
+      new Notification('Tution Pro Test', {
+        body: 'Your web notification system is working perfectly!',
+        icon: '/logo.png'
+      });
+      console.log('Notifications: Test notification sent on web');
+    } else {
+      const permission = await Notification.requestPermission();
+      if (permission === 'granted') {
+        new Notification('Tution Pro Test', {
+          body: 'Your web notification system is working perfectly!',
+          icon: '/logo.png'
         });
+      } else {
+        alert('Notification permission denied. Please enable it in your browser settings.');
       }
     }
   }
-}
-
-export async function scheduleDailySummary(students: Student[]): Promise<void> {
-  const permissionGranted = await checkNotificationPermission();
-  if (!permissionGranted) return;
-  const activeStudents = students.filter(s => s.status === 'active');
-  const totalDues = activeStudents.reduce((acc, s) => acc + getStudentFinancials(s).dues, 0);
-  const studentsWithDues = activeStudents.filter(s => getStudentFinancials(s).dues > 0).length;
-  const tomorrow8AM = new Date();
-  tomorrow8AM.setDate(tomorrow8AM.getDate() + 1);
-  tomorrow8AM.setHours(8, 0, 0, 0);
-  await scheduleNotification({
-    id: 9999,
-    title: 'Daily Tuition Summary',
-    body: `${studentsWithDues} students have dues. Total: ৳${totalDues.toLocaleString()}`,
-    scheduleAt: tomorrow8AM,
-    extra: { type: 'daily_summary' },
-  });
-}
-
-export async function sendTestNotification(): Promise<void> {
-  const permissionGranted = await checkNotificationPermission();
-  if (!permissionGranted) return;
-  const now = new Date();
-  now.setSeconds(now.getSeconds() + 2);
-  await scheduleNotification({
-    id: 99999,
-    title: 'TuitionTracker Test',
-    body: 'Notifications are working correctly!',
-    scheduleAt: now,
-  });
-}
-
-export async function getPendingNotifications(): Promise<any[]> {
-  try {
-    const plugin = await getLocalNotifications();
-    if (!plugin) return [];
-    const result = await plugin.getPending();
-    return result.notifications;
-  } catch {
-    return [];
-  }
-}
+};
