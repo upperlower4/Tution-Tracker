@@ -3,64 +3,28 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from 'react';
-import { 
-  Plus, 
-  Users, 
-  Calendar, 
-  DollarSign, 
-  Search, 
-  ChevronRight, 
-  Phone, 
-  MessageCircle, 
-  Clock,
-  Trash2, 
-  CreditCard,
-  BarChart3,
-  ArrowLeft,
-  UserPlus,
-  Pencil,
-  GraduationCap,
-  TrendingUp,
-  AlertCircle,
-  Wallet,
-  LayoutDashboard,
-  FileText,
-  User,
-  Settings,
-  Check,
-  Layers,
-  Download,
-  Upload,
-  Archive,
-  ArchiveRestore,
-  UserCheck,
-  Copy,
-  Share2,
-  Info,
-  ExternalLink,
-  Globe,
-  Sun,
-  Moon,
-  Bell
+import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  Plus, Users, Calendar, DollarSign, Search, ChevronRight, Phone, MessageCircle, Clock,
+  Trash2, CreditCard, BarChart3, ArrowLeft, UserPlus, Pencil, GraduationCap, TrendingUp,
+  AlertCircle, Wallet, LayoutDashboard, FileText, User, Settings, Check, Layers, Download,
+  Upload, Archive, ArchiveRestore, UserCheck, Copy, Share2, Info, Globe, Sun, Moon, Bell,
+  ChevronDown, ChevronUp, Edit3, X, CheckCircle2, History
 } from 'lucide-react';
-import { format, parseISO, subDays } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { useStorage } from './hooks/useStorage';
-import { Student, SalaryType } from './types';
+import { Student, Payment, SalaryType } from './types';
 import { DAYS_OF_WEEK, getStudentFinancials } from './lib/financeUtils';
 import { cn } from './lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  requestNotificationPermission, 
-  schedulePaymentReminders, 
-  sendTestNotification,
-  checkNotificationPermission 
+import {
+  requestNotificationPermission, schedulePaymentReminders, sendTestNotification, checkNotificationPermission
 } from './lib/notifications';
 
-// --- Components ---
+// ─── Helper Components ────────────────────────────────────────────────────────
 
 const Card = ({ children, className, ...props }: { children: React.ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("bg-white rounded-2xl shadow-md border border-gray-200 overflow-hidden dark:bg-[#1A1D23] dark:border-gray-800 transition-colors duration-300", className)} {...props}>
+  <div className={cn("bg-white rounded-2xl border border-gray-100 overflow-hidden dark:bg-[#1A1D23] dark:border-gray-800/80", className)} {...props}>
     {children}
   </div>
 );
@@ -72,248 +36,296 @@ const Badge = ({ children, variant = 'default', className }: { children: React.R
     warning: "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400",
     danger: "bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400",
   };
-  return (
-    <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium", variants[variant], className)}>
-      {children}
-    </span>
-  );
+  return <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium", variants[variant], className)}>{children}</span>;
+};
+
+const AppLogo = ({ size = 20, className = "" }: { size?: number; className?: string }) => (
+  <div className={cn("relative flex items-center justify-center", className)}>
+    <img src="/logo.png" alt="Tution Pro" className="w-full h-full object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).nextElementSibling?.removeAttribute('style'); }} />
+    <GraduationCap size={size} className="absolute hidden text-white" style={{ display: 'none' }} />
+  </div>
+);
+
+const Toast = ({ message, show }: { message: string; show: boolean }) => (
+  <AnimatePresence>
+    {show && (
+      <motion.div
+        initial={{ opacity: 0, y: 50 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 50 }}
+        className="fixed bottom-28 left-1/2 -translate-x-1/2 z-[200] bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 px-5 py-2.5 rounded-full text-xs font-bold shadow-2xl whitespace-nowrap"
+      >
+        {message}
+      </motion.div>
+    )}
+  </AnimatePresence>
+);
+
+// ─── Step Indicator ───────────────────────────────────────────────────────────
+const StepIndicator = ({ current, total }: { current: number; total: number }) => (
+  <div className="flex items-center gap-2 mb-6">
+    {Array.from({ length: total }, (_, i) => (
+      <div key={i} className={cn("h-1.5 rounded-full transition-all flex-1", i + 1 === current ? "bg-indigo-600 dark:bg-indigo-400" : i + 1 < current ? "bg-indigo-300 dark:bg-indigo-700" : "bg-gray-200 dark:bg-gray-700")} />
+    ))}
+  </div>
+);
+
+// ─── Main App ─────────────────────────────────────────────────────────────────
+interface StudentFormData {
+  name: string; className: string; joinDate: string; batchId: string;
+  salaryType: SalaryType; monthlyFee: string; classDays: string[];
+  phone: string; whatsapp: string; additionalInfo: string;
+}
+
+const defaultForm: StudentFormData = {
+  name: '', className: '', joinDate: new Date().toISOString().split('T')[0],
+  batchId: '', salaryType: 'fixed', monthlyFee: '', classDays: [], phone: '', whatsapp: '', additionalInfo: ''
 };
 
 export default function App() {
-  const { 
-    students, 
-    addStudent, 
-    updateStudent, 
-    archiveStudent, 
-    restoreStudent, 
-    deleteStudentPermanently, 
-    addPayment, 
-    batches,
-    addBatch,
-    updateBatch,
-    deleteBatch,
-    isLoaded 
+  const {
+    students, addStudent, updateStudent, archiveStudent, restoreStudent, deleteStudentPermanently,
+    addPayment, editPayment, deletePayment, batches, addBatch, updateBatch, deleteBatch, isLoaded
   } = useStorage();
+
+  // ─── Profile & Onboarding ─────────────────────────────────────────
   const [userProfile, setUserProfile] = useState<{ name: string; title: string } | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardData, setOnboardData] = useState({ name: '', title: '' });
+  const [customClasses, setCustomClasses] = useState<string[]>([]);
+
+  // ─── Navigation ───────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<'dashboard' | 'students' | 'batches' | 'reports' | 'settings'>('dashboard');
   const [view, setView] = useState<'main' | 'add' | 'edit' | 'details' | 'add-batch'>('main');
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
+
+  // ─── Form State ───────────────────────────────────────────────────
+  const [addStudentStep, setAddStudentStep] = useState(1);
+  const [studentForm, setStudentForm] = useState<StudentFormData>(defaultForm);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // ─── UI State ─────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('');
-  const [salaryType, setSalaryType] = useState<SalaryType>('fixed');
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [restoringStudentId, setRestoringStudentId] = useState<string | null>(null);
   const [restoreDate, setRestoreDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [showResetWarning, setShowResetWarning] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showAppInfo, setShowAppInfo] = useState(false);
   const [showDevInfo, setShowDevInfo] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
-  const [darkMode, setDarkMode] = useState(() => {
-    const saved = localStorage.getItem('tution_dark_mode');
-    return saved === 'true';
-  });
-  const [notificationsEnabled, setNotificationsEnabled] = useState(() => {
-    const saved = localStorage.getItem('tution_notifications_enabled');
-    return saved === 'true';
-  });
+  const [showBatchManagement, setShowBatchManagement] = useState(false);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [exitToast, setExitToast] = useState(false);
+  const [showBackupConfirm, setShowBackupConfirm] = useState(false);
+  const [backupFilename, setBackupFilename] = useState('');
+
+  // ─── Transaction State ────────────────────────────────────────────
+  const [selectedPayment, setSelectedPayment] = useState<{ payment: Payment; studentId: string } | null>(null);
+  const [showTransactionDetail, setShowTransactionDetail] = useState(false);
+  const [showEditPayment, setShowEditPayment] = useState(false);
+  const [showDeletePayment, setShowDeletePayment] = useState(false);
+  const [editPaymentForm, setEditPaymentForm] = useState({ amountPaid: '', month: '', note: '' });
+
+  // ─── Theme & Notifications ────────────────────────────────────────
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('tution_dark_mode') === 'true');
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() => localStorage.getItem('tution_notifications_enabled') === 'true');
   const [notificationPermission, setNotificationPermission] = useState(false);
 
+  // ─── Refs ─────────────────────────────────────────────────────────
+  const backPressRef = useRef(false);
+
+  // ─── Dark Mode ────────────────────────────────────────────────────
   useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    document.documentElement.classList.toggle('dark', darkMode);
     localStorage.setItem('tution_dark_mode', darkMode.toString());
   }, [darkMode]);
 
-  // Check notification permission on mount
+  // ─── Keyboard Detection ───────────────────────────────────────────
   useEffect(() => {
-    checkNotificationPermission().then(granted => {
-      setNotificationPermission(granted);
-    });
+    const handler = () => {
+      if (!window.visualViewport) return;
+      setKeyboardOpen(window.visualViewport.height < window.innerHeight * 0.75);
+    };
+    window.visualViewport?.addEventListener('resize', handler);
+    window.visualViewport?.addEventListener('scroll', handler);
+    return () => {
+      window.visualViewport?.removeEventListener('resize', handler);
+      window.visualViewport?.removeEventListener('scroll', handler);
+    };
   }, []);
 
-  // Schedule notifications when enabled
+  // ─── Back Button Handler ──────────────────────────────────────────
+  const navigateBack = useCallback(() => {
+    if (showAddMenu) { setShowAddMenu(false); return; }
+    if (showDeleteModal) { setShowDeleteModal(false); return; }
+    if (showTransactionDetail) { setShowTransactionDetail(false); return; }
+    if (showEditPayment) { setShowEditPayment(false); return; }
+    if (showDeletePayment) { setShowDeletePayment(false); return; }
+    if (showResetWarning) { setShowResetWarning(false); return; }
+    if (showShareModal) { setShowShareModal(false); return; }
+    if (showAppInfo) { setShowAppInfo(false); return; }
+    if (showDevInfo) { setShowDevInfo(false); return; }
+    if (showBackupConfirm) { setShowBackupConfirm(false); return; }
+
+    if (view === 'add') {
+      if (addStudentStep > 1) { setAddStudentStep(s => s - 1); return; }
+      setView('main'); setAddStudentStep(1); setSelectedBatchId(null); return;
+    }
+    if (view === 'edit') { setView('details'); return; }
+    if (view === 'details') { setView('main'); return; }
+    if (view === 'add-batch') { setView('main'); return; }
+
+    if (activeTab !== 'dashboard') { setActiveTab('dashboard'); setView('main'); return; }
+
+    // On dashboard main — double back to exit
+    if (backPressRef.current) {
+      try {
+        (window as any).navigator?.app?.exitApp?.();
+      } catch {}
+      try {
+        import('@capacitor/app').then(({ App }) => App.exitApp()).catch(() => {});
+      } catch {}
+    } else {
+      backPressRef.current = true;
+      setExitToast(true);
+      setTimeout(() => { backPressRef.current = false; setExitToast(false); }, 2000);
+    }
+  }, [view, activeTab, addStudentStep, showAddMenu, showDeleteModal, showTransactionDetail,
+    showEditPayment, showDeletePayment, showResetWarning, showShareModal, showAppInfo, showDevInfo, showBackupConfirm]);
+
+  useEffect(() => {
+    document.addEventListener('backbutton', navigateBack, false);
+    return () => document.removeEventListener('backbutton', navigateBack, false);
+  }, [navigateBack]);
+
+  // ─── Profile & Notifications ──────────────────────────────────────
+  useEffect(() => {
+    const saved = localStorage.getItem('tution_user_profile_v4');
+    if (saved) setUserProfile(JSON.parse(saved));
+    else setShowOnboarding(true);
+    const savedClasses = localStorage.getItem('tution_classes_v4');
+    setCustomClasses(savedClasses ? JSON.parse(savedClasses) : [
+      'Class 1','Class 2','Class 3','Class 4','Class 5','Class 6','Class 7','Class 8','Class 9','Class 10',
+      'HSC 1st Year','HSC 2nd Year','Degree','Honours','Masters','Other'
+    ]);
+  }, []);
+
+  useEffect(() => {
+    checkNotificationPermission().then(setNotificationPermission);
+  }, []);
+
   useEffect(() => {
     if (notificationsEnabled && notificationPermission && students.length > 0) {
       schedulePaymentReminders(students);
     }
   }, [notificationsEnabled, notificationPermission, students]);
 
-  // Onboarding form state
-  const [onboardData, setOnboardData] = useState({ name: '', title: '' });
-  const [customClasses, setCustomClasses] = useState<string[]>([]);
-
+  // ─── Populate edit form ───────────────────────────────────────────
   useEffect(() => {
-    const savedProfile = localStorage.getItem('tution_user_profile_v4');
-    if (savedProfile) {
-      setUserProfile(JSON.parse(savedProfile));
-    } else {
-      setShowOnboarding(true);
+    if (view === 'edit' && selectedStudent) {
+      setStudentForm({
+        name: selectedStudent.name, className: selectedStudent.className,
+        joinDate: selectedStudent.joinDate, batchId: selectedStudent.batchId || '',
+        salaryType: selectedStudent.salaryType, monthlyFee: selectedStudent.monthlyFee?.toString() || '',
+        classDays: [...selectedStudent.classDays], phone: selectedStudent.phone || '',
+        whatsapp: selectedStudent.whatsapp || '', additionalInfo: selectedStudent.additionalInfo || ''
+      });
+      setAddStudentStep(1);
+    } else if (view === 'add') {
+      const batch = batches.find(b => b.id === selectedBatchId);
+      setStudentForm({
+        ...defaultForm,
+        batchId: selectedBatchId || '',
+        ...(batch ? { className: batch.className, monthlyFee: batch.monthlyFee.toString(), salaryType: batch.salaryType, classDays: [...batch.classDays] } : {})
+      });
+      setAddStudentStep(1);
     }
+  }, [view]);
 
-    const savedClasses = localStorage.getItem('tution_classes_v4');
-    if (savedClasses) {
-      setCustomClasses(JSON.parse(savedClasses));
-    } else {
-      setCustomClasses([
-        'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 
-        'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 
-        'HSC 1st Year', 'HSC 2nd Year', 'Degree', 'Honours', 'Masters', 'Other'
-      ]);
-    }
-  }, []);
-
+  // ─── Helpers ──────────────────────────────────────────────────────
   const classesToUse = customClasses.length > 0 ? customClasses : [
-    'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 
-    'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 
-    'HSC 1st Year', 'HSC 2nd Year', 'Degree', 'Honours', 'Masters', 'Other'
+    'Class 1','Class 2','Class 3','Class 4','Class 5','Class 6','Class 7','Class 8','Class 9','Class 10',
+    'HSC 1st Year','HSC 2nd Year','Degree','Honours','Masters','Other'
   ];
+  const selectedStudent = students.find(s => s.id === selectedStudentId);
+  const filteredStudents = students.filter(s => {
+    const matchesSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) || s.className.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesSearch && (showArchived ? s.status === 'inactive' : s.status === 'active');
+  });
 
   const handleSaveClasses = (newClasses: string[]) => {
     setCustomClasses(newClasses);
     localStorage.setItem('tution_classes_v4', JSON.stringify(newClasses));
   };
 
-  const handleSaveProfile = (data: { name: string; title: string }) => {
+  const handleSaveProfile = async (data: { name: string; title: string }) => {
     setUserProfile(data);
     localStorage.setItem('tution_user_profile_v4', JSON.stringify(data));
     setShowOnboarding(false);
+    const granted = await requestNotificationPermission();
+    if (granted) {
+      setNotificationsEnabled(true);
+      setNotificationPermission(true);
+      localStorage.setItem('tution_notifications_enabled', 'true');
+    }
   };
 
   const handleCopyLink = () => {
-    navigator.clipboard.writeText('https://tutiontracker.vercel.app');
+    navigator.clipboard.writeText('https://tution.pro.bd');
     setCopySuccess(true);
     setTimeout(() => setCopySuccess(false), 2000);
   };
 
   const handleShare = (platform: 'whatsapp' | 'messenger' | 'other') => {
-    const url = 'https://tutiontracker.vercel.app';
-    const text = 'Check out TuitionTracker - The ultimate app for private tutors!';
-    
+    const url = 'https://tution.pro.bd';
+    const text = 'Check out Tution Pro - The ultimate app for private tutors!';
     if (platform === 'whatsapp') {
       window.open(`https://wa.me/?text=${encodeURIComponent(text + ' ' + url)}`, '_blank');
     } else if (platform === 'messenger') {
-      // Messenger sharing - copy link instead as FB App ID required
       handleCopyLink();
     } else {
       if (navigator.share) {
-        navigator.share({
-          title: 'TuitionTracker',
-          text: text,
-          url: url,
-        });
+        navigator.share({ title: 'Tution Pro', text, url }).catch(() => handleCopyLink());
+      } else {
+        handleCopyLink();
       }
     }
   };
 
-  const selectedStudent = students.find(s => s.id === selectedStudentId);
-
-  // Pre-fill salary type when editing or adding from batch
-  useEffect(() => {
-    if (view === 'edit' && selectedStudent) {
-      setSalaryType(selectedStudent.salaryType);
-    } else if (view === 'add') {
-      if (selectedBatchId) {
-        const batch = batches.find(b => b.id === selectedBatchId);
-        if (batch) {
-          setSalaryType(batch.salaryType);
-        } else {
-          setSalaryType('fixed');
-        }
-      } else {
-        setSalaryType('fixed');
-      }
-    }
-  }, [view, selectedStudent, selectedBatchId, batches]);
-
-  const filteredStudents = students.filter(s => {
-    const matchesSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                         s.className.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = showArchived ? s.status === 'inactive' : s.status === 'active';
-    return matchesSearch && matchesStatus;
-  });
-
-  if (!isLoaded) return <div className="flex items-center justify-center h-screen font-sans">Loading...</div>;
-
-  if (showOnboarding) {
-    return (
-      <div className="min-h-screen bg-[#F8F9FA] dark:bg-[#0F1115] flex items-center justify-center p-6 font-sans transition-colors duration-300">
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-md bg-white dark:bg-[#1A1D23] rounded-[2.5rem] sm:rounded-[3rem] p-6 sm:p-10 shadow-2xl shadow-indigo-100 dark:shadow-none border border-transparent dark:border-gray-800"
-        >
-          <div className="w-16 h-16 sm:w-20 sm:h-20 bg-indigo-600 rounded-[1.5rem] sm:rounded-[2rem] flex items-center justify-center text-white mb-6 sm:mb-8 shadow-xl shadow-indigo-200 dark:shadow-none">
-            <GraduationCap size={32} />
-          </div>
-          <h2 className="text-3xl sm:text-4xl font-black tracking-tighter mb-2 dark:text-gray-100">Welcome!</h2>
-          <p className="text-gray-700 dark:text-gray-400 font-medium mb-8 sm:mb-10 text-sm sm:text-base">Let's set up your tuition profile to get started.</p>
-          
-          <form className="space-y-4 sm:space-y-6" onSubmit={(e) => {
-            e.preventDefault();
-            if (onboardData.name && onboardData.title) {
-              handleSaveProfile(onboardData);
-            }
-          }}>
-            <div className="space-y-2">
-              <label className="text-[10px] font-black text-gray-700 dark:text-gray-400 uppercase tracking-widest ml-1">Your Name</label>
-              <input 
-                required
-                className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 sm:p-5 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold placeholder:text-gray-500 text-sm sm:text-base dark:text-gray-100" 
-                placeholder="e.g. Tanvir Ahmed"
-                value={onboardData.name}
-                onChange={(e) => setOnboardData(prev => ({ ...prev, name: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[10px] font-black text-gray-700 dark:text-gray-400 uppercase tracking-widest ml-1">Professional Title</label>
-              <input 
-                required
-                className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 sm:p-5 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold placeholder:text-gray-500 text-sm sm:text-base dark:text-gray-100" 
-                placeholder="e.g. Mathematics Tutor"
-                value={onboardData.title}
-                onChange={(e) => setOnboardData(prev => ({ ...prev, title: e.target.value }))}
-              />
-            </div>
-            <button type="submit" className="w-full bg-indigo-600 dark:bg-indigo-500 text-white py-4 sm:py-5 rounded-[1.5rem] sm:rounded-[2rem] font-black text-lg sm:text-xl hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all shadow-xl shadow-indigo-100 dark:shadow-none active:scale-[0.98] mt-2 sm:mt-4">
-              Get Started
-            </button>
-          </form>
-        </motion.div>
-      </div>
-    );
-  }
-
   const handleExportData = () => {
-    const data = {
-      students,
-      batches,
-      version: '1.0',
-      timestamp: new Date().toISOString()
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
+    const monthStr = format(new Date(), 'MMMM_yyyy');
+    const filename = `TutionPro_${monthStr}_Report.json`;
+    setBackupFilename(filename);
+    const data = { students, batches, version: '1.0', timestamp: new Date().toISOString() };
+    const dataStr = JSON.stringify(data, null, 2);
+    const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `tuition_tracker_backup_${format(new Date(), 'yyyy-MM-dd')}.json`;
+    a.setAttribute('href', dataUri);
+    a.setAttribute('download', filename);
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => setShowBackupConfirm(true), 300);
+  };
+
+  const handleShareBackup = async () => {
+    const data = { students, batches, version: '1.0', timestamp: new Date().toISOString() };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const file = new File([blob], backupFilename, { type: 'application/json' });
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ title: 'Tution Pro Backup', files: [file] }).catch(() => {});
+    } else if (navigator.share) {
+      await navigator.share({ title: 'Tution Pro Backup', text: 'My Tution Pro data backup', url: 'https://tution.pro.bd' }).catch(() => {});
+    }
   };
 
   const handleImportData = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
@@ -324,252 +336,715 @@ export default function App() {
             localStorage.setItem('tution_tracker_batches', JSON.stringify(data.batches));
             window.location.reload();
           }
-        } else {
-          alert('Invalid backup file format.');
-        }
-      } catch (err) {
-        alert('Failed to read backup file.');
-      }
+        } else { alert('Invalid backup file format.'); }
+      } catch { alert('Failed to read backup file.'); }
     };
     reader.readAsText(file);
   };
 
+  // ─── Student Form Submit ──────────────────────────────────────────
+  const handleStudentSubmit = () => {
+    if (isSubmitting) return;
+    if (addStudentStep < 3) { setAddStudentStep(s => s + 1); return; }
+    setIsSubmitting(true);
+    const data = {
+      name: studentForm.name, className: studentForm.className, joinDate: studentForm.joinDate,
+      phone: studentForm.phone, whatsapp: studentForm.whatsapp, classDays: studentForm.classDays,
+      salaryType: studentForm.salaryType, monthlyFee: Number(studentForm.monthlyFee) || 0,
+      additionalInfo: studentForm.additionalInfo, batchId: studentForm.batchId || undefined,
+    };
+    if (view === 'add') { addStudent(data); setView('main'); setActiveTab('students'); setSelectedBatchId(null); }
+    else if (view === 'edit' && selectedStudentId) { updateStudent(selectedStudentId, data); setView('details'); }
+    setAddStudentStep(1);
+    setIsSubmitting(false);
+  };
+
+  const handleOpenTransactionDetail = (payment: Payment, studentId: string) => {
+    setSelectedPayment({ payment, studentId });
+    setShowTransactionDetail(true);
+  };
+
+  const handleEditPayment = () => {
+    if (!selectedPayment) return;
+    setEditPaymentForm({
+      amountPaid: selectedPayment.payment.amountPaid.toString(),
+      month: selectedPayment.payment.month,
+      note: selectedPayment.payment.note || ''
+    });
+    setShowTransactionDetail(false);
+    setShowEditPayment(true);
+  };
+
+  const handleSaveEditPayment = () => {
+    if (!selectedPayment) return;
+    editPayment(selectedPayment.studentId, selectedPayment.payment.id, {
+      amountPaid: Number(editPaymentForm.amountPaid),
+      month: editPaymentForm.month,
+      note: editPaymentForm.note
+    });
+    setShowEditPayment(false);
+    setSelectedPayment(null);
+  };
+
+  const handleDeletePaymentConfirm = () => {
+    if (!selectedPayment) return;
+    deletePayment(selectedPayment.studentId, selectedPayment.payment.id);
+    setShowDeletePayment(false);
+    setShowTransactionDetail(false);
+    setSelectedPayment(null);
+  };
+
+  // Recent transactions across all students
+  const recentTransactions = students
+    .flatMap(s => s.payments.map(p => ({ ...p, studentName: s.name, studentId: s.id })))
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 10);
+
+  // ─── Loading ──────────────────────────────────────────────────────
+  if (!isLoaded) return <div className="flex items-center justify-center h-screen font-sans text-gray-500">Loading...</div>;
+
+  // ─── Onboarding ───────────────────────────────────────────────────
+  if (showOnboarding) {
+    return (
+      <div className="min-h-screen bg-[#F8F9FA] dark:bg-[#0F1115] flex items-center justify-center p-6 font-sans">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-md bg-white dark:bg-[#1A1D23] rounded-[2.5rem] p-8 shadow-2xl shadow-indigo-100/50 dark:shadow-none border border-gray-100 dark:border-gray-800">
+          <div className="w-16 h-16 bg-indigo-600 rounded-[1.5rem] flex items-center justify-center text-white mb-6 shadow-xl shadow-indigo-200 dark:shadow-none overflow-hidden">
+            <img src="/logo.png" alt="Tution Pro" className="w-full h-full object-contain" onError={(e) => { (e.target as any).style.display='none'; }} />
+            <GraduationCap size={32} />
+          </div>
+          <h2 className="text-3xl font-black tracking-tighter mb-1 dark:text-gray-100">Welcome!</h2>
+          <p className="text-gray-500 dark:text-gray-400 font-medium mb-8 text-sm">Set up your Tution Pro profile to get started.</p>
+          <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (onboardData.name && onboardData.title) handleSaveProfile(onboardData); }}>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest ml-1">Your Name</label>
+              <input required className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold placeholder:text-gray-400 dark:text-gray-100" placeholder="e.g. Tanvir Ahmed" value={onboardData.name} onChange={(e) => setOnboardData(p => ({ ...p, name: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest ml-1">Professional Title</label>
+              <input required className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold placeholder:text-gray-400 dark:text-gray-100" placeholder="e.g. Mathematics Tutor" value={onboardData.title} onChange={(e) => setOnboardData(p => ({ ...p, title: e.target.value }))} />
+            </div>
+            <button type="submit" className="w-full bg-indigo-600 text-white py-4 rounded-[1.5rem] font-black text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 dark:shadow-none active:scale-[0.98] mt-4">
+              Get Started
+            </button>
+          </form>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // ─── Main App ─────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-[#F8F9FA] text-gray-900 font-sans pb-32 dark:bg-[#0F1115] dark:text-gray-100 transition-colors duration-300">
+    <div className="min-h-screen bg-[#F8F9FA] text-gray-900 font-sans dark:bg-[#0F1115] dark:text-gray-100 transition-colors duration-300">
+      <Toast message="Press back again to exit" show={exitToast} />
+
       {/* Header */}
       <header className="bg-white/80 backdrop-blur-3xl border-b border-gray-100/50 sticky top-0 z-40 dark:bg-[#0F1115]/80 dark:border-gray-800/50">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 sm:h-20 flex items-center justify-between">
-          <div className="flex items-center gap-2 sm:gap-3 cursor-pointer group" onClick={() => {
-            setActiveTab('dashboard');
-            setView('main');
-          }}>
-            <div className="w-9 h-9 sm:w-10 sm:h-10 bg-indigo-600 rounded-xl sm:rounded-2xl flex items-center justify-center text-white shadow-xl shadow-indigo-200 group-hover:scale-105 transition-transform shrink-0">
-              <GraduationCap size={20} />
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2.5 cursor-pointer group" onClick={() => { setActiveTab('dashboard'); setView('main'); }}>
+            <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200/60 dark:shadow-none group-hover:scale-105 transition-transform shrink-0 overflow-hidden">
+              <img src="/logo.png" alt="Tution Pro" className="w-full h-full object-contain p-1" onError={(e) => { (e.target as any).style.display='none'; (e.target as any).nextSibling.style.display='block'; }} />
+              <GraduationCap size={18} style={{ display: 'none' }} />
             </div>
-            <div className="min-w-0">
-              <h1 className="font-black text-base sm:text-xl tracking-tighter text-gray-900 leading-none truncate dark:text-white">
-                Tuition<span className="text-indigo-600">Tracker</span>
+            <div>
+              <h1 className="font-black text-[15px] tracking-tight text-gray-900 leading-none dark:text-white">
+                Tution<span className="text-indigo-600">Pro</span>
               </h1>
-              <p className="text-[8px] sm:text-[10px] font-black text-gray-700 uppercase tracking-widest mt-0.5 sm:mt-1 truncate dark:text-gray-400">
-                Hello, {userProfile?.name.split(' ')[0] || 'Tutor'}
+              <p className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mt-0.5 dark:text-gray-500">
+                {userProfile?.name.split(' ')[0]}
               </p>
             </div>
           </div>
-          
-          <div className="hidden md:flex items-center gap-6 mr-6">
+
+          {/* Desktop nav */}
+          <div className="hidden md:flex items-center gap-1 mr-4">
             {[
-              { id: 'dashboard', label: 'Home', icon: <LayoutDashboard size={18} /> },
-              { id: 'students', label: 'Students', icon: <Users size={18} /> },
-              { id: 'reports', label: 'Reports', icon: <FileText size={18} /> },
-              { id: 'settings', label: 'Profile', icon: <User size={18} /> },
+              { id: 'dashboard', label: 'Home', icon: <LayoutDashboard size={16} /> },
+              { id: 'students', label: 'Students', icon: <Users size={16} /> },
+              { id: 'reports', label: 'Reports', icon: <FileText size={16} /> },
+              { id: 'settings', label: 'Profile', icon: <User size={16} /> },
             ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => {
-                  setActiveTab(tab.id as any);
-                  setView('main');
-                }}
-                className={cn(
-                  "flex items-center gap-2 px-4 py-2 rounded-xl font-black text-xs uppercase tracking-widest transition-all",
-                  activeTab === tab.id 
-                    ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" 
-                    : "text-gray-700 hover:text-gray-900 hover:bg-gray-50 dark:text-gray-400 dark:hover:text-gray-100 dark:hover:bg-gray-800"
-                )}
-              >
-                {tab.icon}
-                <span>{tab.label}</span>
+              <button key={tab.id} onClick={() => { setActiveTab(tab.id as any); setView('main'); }}
+                className={cn("flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs uppercase tracking-wider transition-all",
+                  activeTab === tab.id ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50 dark:text-gray-400 dark:hover:text-gray-100 dark:hover:bg-gray-800")}>
+                {tab.icon}<span>{tab.label}</span>
               </button>
             ))}
           </div>
-          
-          <div className="flex items-center gap-2 sm:gap-3">
-            <button 
-              onClick={() => setDarkMode(!darkMode)}
-              className={cn(
-                "p-2.5 rounded-2xl transition-all",
-                darkMode ? "text-amber-400 bg-amber-400/10" : "text-gray-700 hover:text-indigo-600 hover:bg-indigo-50"
-              )}
-              title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
-            >
-              {darkMode ? <Sun size={22} /> : <Moon size={22} />}
-            </button>
-          </div>
+
+          <button onClick={() => setDarkMode(!darkMode)}
+            className={cn("p-2 rounded-xl transition-all", darkMode ? "text-amber-400 bg-amber-400/10" : "text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-500/10")}>
+            {darkMode ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-10 mb-24 w-full overflow-x-hidden">
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-5 sm:py-8 pb-28 w-full overflow-x-hidden">
         <AnimatePresence mode="wait">
+          {/* ─── Dashboard ─── */}
           {activeTab === 'dashboard' && view === 'main' && (
-            <motion.div 
-              key="dashboard"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="space-y-8"
-            >
-              {/* Dashboard Top Overview */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
+            <motion.div key="dashboard" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }} className="space-y-6">
+              {/* Stats */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 {[
-                  { 
-                    label: 'Monthly Target', 
-                    value: `৳${students.filter(s => s.status === 'active' && s.salaryType === 'fixed').reduce((acc, s) => acc + s.monthlyFee, 0).toLocaleString()}`, 
-                    color: 'text-white', 
-                    bg: 'bg-indigo-600', 
-                    icon: <TrendingUp className="w-4 h-4 sm:w-5 h-5" />,
-                    sub: 'Target for ' + format(new Date(), 'MMM')
-                  },
-                  { 
-                    label: 'Collected (Month)', 
-                    value: `৳${students.reduce((acc, s) => acc + s.payments.filter(p => {
-                      const pDate = parseISO(p.date);
-                      return pDate.getMonth() === new Date().getMonth() && pDate.getFullYear() === new Date().getFullYear();
-                    }).reduce((pAcc, p) => pAcc + p.amountPaid, 0), 0).toLocaleString()}`, 
-                    color: 'text-emerald-600', 
-                    bg: 'bg-white', 
-                    icon: <DollarSign className="w-4 h-4 sm:w-5 h-5" />,
-                    sub: 'Received this month'
-                  },
-                  { 
-                    label: 'Total Dues', 
-                    value: `৳${students.filter(s => s.status === 'active').reduce((acc, s) => acc + getStudentFinancials(s).dues, 0).toLocaleString()}`, 
-                    color: 'text-rose-600', 
-                    bg: 'bg-white', 
-                    icon: <AlertCircle className="w-4 h-4 sm:w-5 h-5" />,
-                    sub: 'Pending from all'
-                  },
-                  { 
-                    label: 'New Students', 
-                    value: students.filter(s => {
-                      const jDate = parseISO(s.joinDate);
-                      return jDate.getMonth() === new Date().getMonth() && jDate.getFullYear() === new Date().getFullYear();
-                    }).length, 
-                    color: 'text-indigo-600', 
-                    bg: 'bg-white', 
-                    icon: <UserPlus className="w-4 h-4 sm:w-5 h-5" />,
-                    sub: 'Joined this month'
-                  }
+                  { label: 'Monthly Target', value: `৳${students.filter(s => s.status === 'active' && s.salaryType === 'fixed').reduce((a, s) => a + s.monthlyFee, 0).toLocaleString()}`, color: 'text-white', bg: 'bg-indigo-600', icon: <TrendingUp className="w-4 h-4" />, sub: format(new Date(), 'MMM') + ' target' },
+                  { label: 'Collected', value: `৳${students.reduce((a, s) => a + s.payments.filter(p => { const d = parseISO(p.date); return d.getMonth() === new Date().getMonth() && d.getFullYear() === new Date().getFullYear(); }).reduce((pa, p) => pa + p.amountPaid, 0), 0).toLocaleString()}`, color: 'text-emerald-600', bg: 'bg-white', icon: <DollarSign className="w-4 h-4" />, sub: 'This month' },
+                  { label: 'Total Dues', value: `৳${students.filter(s => s.status === 'active').reduce((a, s) => a + getStudentFinancials(s).dues, 0).toLocaleString()}`, color: 'text-rose-600', bg: 'bg-white', icon: <AlertCircle className="w-4 h-4" />, sub: 'Pending' },
+                  { label: 'New Students', value: students.filter(s => { const d = parseISO(s.joinDate); return d.getMonth() === new Date().getMonth() && d.getFullYear() === new Date().getFullYear(); }).length, color: 'text-indigo-600', bg: 'bg-white', icon: <UserPlus className="w-4 h-4" />, sub: 'This month' }
                 ].map((stat, i) => (
-                  <Card key={i} className={cn(
-                    "p-4 sm:p-6 border-none shadow-sm hover:shadow-md transition-all rounded-[1.5rem] sm:rounded-[2rem] flex flex-col justify-between min-h-[110px] sm:min-h-[140px]", 
-                    stat.bg === 'bg-white' ? "bg-white dark:bg-[#1A1D23] dark:border dark:border-gray-800" : stat.bg
-                  )}>
-                    <div className="flex items-center justify-between mb-2 sm:mb-4">
-                      <div className={cn(
-                        "p-1.5 sm:p-2.5 rounded-xl sm:rounded-2xl",
-                        stat.bg === 'bg-indigo-600' ? "bg-white/10 text-white" : "bg-gray-50 dark:bg-gray-800 " + stat.color
-                      )}>
-                        {stat.icon}
-                      </div>
-                      <p className={cn(
-                        "text-[8px] sm:text-[10px] font-black uppercase tracking-widest",
-                        stat.bg === 'bg-indigo-600' ? "text-indigo-100" : "text-gray-700 dark:text-gray-400"
-                      )}>{stat.label}</p>
+                  <Card key={i} className={cn("p-4 border-none rounded-[1.25rem] flex flex-col justify-between min-h-[100px]", stat.bg === 'bg-white' ? "bg-white dark:bg-[#1A1D23] dark:border-gray-800/80" : stat.bg)}>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className={cn("p-1.5 rounded-lg", stat.bg === 'bg-indigo-600' ? "bg-white/10 text-white" : "bg-gray-50 dark:bg-gray-800 " + stat.color)}>{stat.icon}</div>
+                      <p className={cn("text-[9px] font-black uppercase tracking-widest", stat.bg === 'bg-indigo-600' ? "text-indigo-100" : "text-gray-400 dark:text-gray-500")}>{stat.label}</p>
                     </div>
                     <div>
-                      <h3 className={cn(
-                        "text-lg sm:text-2xl font-black tracking-tighter mb-0.5 sm:mb-1", 
-                        stat.bg === 'bg-indigo-600' ? "text-white" : (darkMode ? "text-gray-100" : stat.color)
-                      )}>{stat.value}</h3>
-                      <p className={cn(
-                        "text-[8px] sm:text-[10px] font-bold uppercase tracking-wider opacity-60",
-                        stat.bg === 'bg-indigo-600' ? "text-indigo-100" : "text-gray-600 dark:text-gray-400"
-                      )}>{stat.sub}</p>
+                      <h3 className={cn("text-lg sm:text-xl font-black tracking-tighter mb-0.5", stat.bg === 'bg-indigo-600' ? "text-white" : (darkMode ? "text-gray-100" : stat.color))}>{stat.value}</h3>
+                      <p className={cn("text-[9px] font-bold uppercase tracking-wider opacity-60", stat.bg === 'bg-indigo-600' ? "text-white" : "text-gray-500 dark:text-gray-400")}>{stat.sub}</p>
                     </div>
                   </Card>
                 ))}
               </div>
 
               {/* Quick Actions */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
-                <button 
-                  onClick={() => {
-                    setSelectedStudentId(null);
-                    setSelectedBatchId(null);
-                    setActiveTab('students');
-                    setView('add');
-                  }}
-                  className="group bg-white dark:bg-[#1A1D23] p-6 rounded-[2rem] shadow-sm hover:shadow-md transition-all flex items-center gap-4 text-left border border-gray-100 dark:border-gray-800"
-                >
-                  <div className="w-12 h-12 bg-indigo-600 text-white rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
-                    <Plus size={24} />
-                  </div>
-                  <div>
-                    <p className="font-black text-sm tracking-tight dark:text-gray-100">Add New Student</p>
-                    <p className="text-[10px] font-bold text-gray-700 dark:text-gray-400 uppercase tracking-widest">Register a learner</p>
-                  </div>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => { setSelectedStudentId(null); setSelectedBatchId(null); setActiveTab('students'); setView('add'); }}
+                  className="group bg-white dark:bg-[#1A1D23] p-5 rounded-2xl border border-gray-100 dark:border-gray-800/80 flex items-center gap-3 text-left active:scale-[0.97] transition-all">
+                  <div className="w-11 h-11 bg-indigo-600 text-white rounded-xl flex items-center justify-center group-active:scale-95 transition-transform shrink-0"><Plus size={22} /></div>
+                  <div><p className="font-black text-sm dark:text-gray-100">Add Student</p><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Register learner</p></div>
                 </button>
-                
-                <button 
-                  onClick={() => {
-                    setActiveTab('batches');
-                    setView('main');
-                  }}
-                  className="group bg-white dark:bg-[#1A1D23] p-6 rounded-[2rem] shadow-sm hover:shadow-md transition-all flex items-center gap-4 text-left border border-gray-100 dark:border-gray-800"
-                >
-                  <div className="w-12 h-12 bg-amber-500 text-white rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
-                    <Layers size={24} />
-                  </div>
-                  <div>
-                    <p className="font-black text-sm tracking-tight dark:text-gray-100">Manage Batches</p>
-                    <p className="text-[10px] font-bold text-gray-700 dark:text-gray-400 uppercase tracking-widest">Organize groups</p>
-                  </div>
+                <button onClick={() => { setActiveTab('batches'); setView('main'); }}
+                  className="group bg-white dark:bg-[#1A1D23] p-5 rounded-2xl border border-gray-100 dark:border-gray-800/80 flex items-center gap-3 text-left active:scale-[0.97] transition-all">
+                  <div className="w-11 h-11 bg-amber-500 text-white rounded-xl flex items-center justify-center group-active:scale-95 transition-transform shrink-0"><Layers size={22} /></div>
+                  <div><p className="font-black text-sm dark:text-gray-100">Batches</p><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Manage groups</p></div>
                 </button>
               </div>
 
-              {/* Recent Students Section */}
-              <div className="space-y-4">
+              {/* Recent Students */}
+              <div className="space-y-3">
                 <div className="flex items-center justify-between px-1">
-                  <h2 className="font-black text-xl tracking-tight flex items-center gap-2">
-                    <Calendar size={20} className="text-indigo-600" />
-                    Recent Students
-                  </h2>
-                  <button 
-                    onClick={() => setActiveTab('students')}
-                    className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-all"
-                    title="View All Students"
-                  >
-                    <Users size={16} />
-                  </button>
+                  <h2 className="font-black text-base tracking-tight flex items-center gap-2 dark:text-gray-100"><Users size={16} className="text-indigo-600" />Recent Students</h2>
+                  <button onClick={() => setActiveTab('students')} className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">See All</button>
                 </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {students.filter(s => s.status === 'active').slice(0, 4).map(student => {
-                    const financials = getStudentFinancials(student);
+                <div className="space-y-2">
+                  {students.filter(s => s.status === 'active').slice(0, 5).map(student => {
+                    const fin = getStudentFinancials(student);
                     return (
-                      <Card key={student.id} className="hover:ring-4 hover:ring-indigo-500/5 transition-all cursor-pointer group border-none shadow-sm rounded-[1.5rem]">
-                        <div 
-                          className="p-4 flex items-center justify-between"
-                          onClick={() => {
-                            setSelectedStudentId(student.id);
-                            setActiveTab('students');
-                            setView('details');
-                          }}
-                        >
-                          <div className="flex flex-col min-w-0">
-                            <h3 className="font-black text-base dark:text-gray-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors leading-tight truncate">{student.name}</h3>
-                            <p className="text-[10px] text-gray-500 dark:text-gray-400 font-bold mt-0.5 uppercase tracking-wider truncate">{student.className}</p>
-                          </div>
-                          
-                          <div className="flex items-center gap-3 shrink-0">
-                            {student.salaryType === 'fixed' ? (
-                              financials.dues > 0 ? (
-                                <div className="bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest">
-                                  Due ৳{financials.dues.toLocaleString()}
-                                </div>
-                              ) : (
-                                <div className="bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest">
-                                  Paid
-                                </div>
-                              )
-                            ) : (
-                              <div className="bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest">
-                                Per Class
-                              </div>
-                            )}
-                            <ChevronRight size={16} className="text-gray-400 group-hover:text-indigo-600 transition-colors" />
+                      <div key={student.id} onClick={() => { setSelectedStudentId(student.id); setActiveTab('students'); setView('details'); }}
+                        className="bg-white dark:bg-[#1A1D23] rounded-2xl border border-gray-100 dark:border-gray-800/80 p-3.5 flex items-center justify-between active:scale-[0.98] transition-all cursor-pointer">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-xl flex items-center justify-center text-white text-sm font-black shrink-0">{student.name.charAt(0)}</div>
+                          <div className="min-w-0">
+                            <p className="font-black text-sm dark:text-gray-100 truncate">{student.name}</p>
+                            <p className="text-[9px] text-gray-400 font-bold uppercase tracking-wider truncate">{student.className}</p>
                           </div>
                         </div>
-                      </Card>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {student.salaryType === 'fixed' ? (
+                            fin.dues > 0 ? <span className="bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 px-2 py-1 rounded-lg text-[9px] font-black uppercase">Due ৳{fin.dues.toLocaleString()}</span>
+                              : <span className="bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-2 py-1 rounded-lg text-[9px] font-black uppercase">Paid</span>
+                          ) : <span className="bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 px-2 py-1 rounded-lg text-[9px] font-black uppercase">Per Class</span>}
+                          <ChevronRight size={14} className="text-gray-300 dark:text-gray-600" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {students.filter(s => s.status === 'active').length === 0 && (
+                    <div className="text-center py-10 bg-white dark:bg-[#1A1D23] rounded-2xl border border-dashed border-gray-200 dark:border-gray-800">
+                      <p className="text-gray-400 text-sm font-medium">No students yet. Add your first student!</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* ─── Students List ─── */}
+          {activeTab === 'students' && view === 'main' && (
+            <motion.div key="students" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }} className="space-y-4">
+              <div className="relative">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                <input type="text" placeholder="Search students or classes..." className="w-full bg-white dark:bg-[#1A1D23] border border-gray-100 dark:border-gray-800 rounded-2xl py-3.5 pl-12 pr-4 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 text-sm font-medium placeholder:text-gray-400 dark:text-gray-100" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+              </div>
+              <div className="flex items-center justify-between px-1">
+                <div className="flex items-center gap-2">
+                  <h2 className="font-black text-base tracking-tight flex items-center gap-2 dark:text-gray-100">{showArchived ? <Archive size={16} className="text-indigo-600" /> : <Users size={16} className="text-indigo-600" />}{showArchived ? 'Archived' : 'Directory'}</h2>
+                  <button onClick={() => setShowArchived(!showArchived)} className={cn("p-1.5 rounded-lg transition-all", showArchived ? "bg-indigo-600 text-white" : "bg-gray-100 dark:bg-gray-800 text-gray-500")}>{showArchived ? <UserCheck size={13} /> : <Archive size={13} />}</button>
+                </div>
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{filteredStudents.length} students</span>
+              </div>
+              {filteredStudents.length === 0 ? (
+                <div className="text-center py-14 bg-white dark:bg-[#1A1D23] rounded-2xl border-2 border-dashed border-gray-100 dark:border-gray-800">
+                  <Users size={28} className="mx-auto mb-3 text-gray-300 dark:text-gray-600" />
+                  <p className="text-gray-400 text-sm font-medium">No students found.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {filteredStudents.map(student => {
+                    const fin = getStudentFinancials(student);
+                    return (
+                      <div key={student.id} onClick={() => { setSelectedStudentId(student.id); setView('details'); }}
+                        className="bg-white dark:bg-[#1A1D23] rounded-2xl border border-gray-100 dark:border-gray-800/80 p-3.5 flex items-center justify-between active:scale-[0.98] transition-all cursor-pointer">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-xl flex items-center justify-center text-white font-black shrink-0">{student.name.charAt(0)}</div>
+                          <div className="min-w-0">
+                            <p className="font-black text-sm dark:text-gray-100 truncate">{student.name}</p>
+                            <p className="text-[9px] text-gray-400 font-bold uppercase tracking-wider truncate">{student.className} • {student.classDays.join(', ')}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {student.salaryType === 'fixed' ? (
+                            fin.dues > 0 ? <span className="bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 px-2 py-1 rounded-lg text-[9px] font-black uppercase">Due ৳{fin.dues.toLocaleString()}</span>
+                              : fin.advance > 0 ? <span className="bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2 py-1 rounded-lg text-[9px] font-black uppercase">Adv ৳{fin.advance.toLocaleString()}</span>
+                                : <span className="bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-2 py-1 rounded-lg text-[9px] font-black uppercase">Paid</span>
+                          ) : <span className="bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 px-2 py-1 rounded-lg text-[9px] font-black uppercase">{student.salaryType === 'free' ? 'Free' : 'Not Fixed'}</span>}
+                          <ChevronRight size={14} className="text-gray-300 dark:text-gray-600" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {/* ─── Add / Edit Student (3-step) ─── */}
+          {(view === 'add' || view === 'edit') && (
+            <motion.div key={view} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="max-w-2xl mx-auto">
+              <div className="flex items-center gap-3 mb-6">
+                <button onClick={() => {
+                  if (addStudentStep > 1) { setAddStudentStep(s => s - 1); return; }
+                  setView(view === 'edit' ? 'details' : 'main'); setSelectedBatchId(null); setAddStudentStep(1);
+                }} className="p-2 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                  <ArrowLeft size={18} />
+                </button>
+                <div>
+                  <h2 className="font-black text-xl tracking-tight dark:text-gray-100">{view === 'add' ? 'New Student' : 'Edit Student'}</h2>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Step {addStudentStep} of 3</p>
+                </div>
+              </div>
+
+              <StepIndicator current={addStudentStep} total={3} />
+
+              <div className="space-y-4">
+                {/* Step 1: Basic Info */}
+                {addStudentStep === 1 && (
+                  <motion.div key="step1" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
+                    <div className="text-center mb-6">
+                      <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white mx-auto mb-3 shadow-lg shadow-indigo-200 dark:shadow-none"><UserPlus size={22} /></div>
+                      <h3 className="font-black text-lg dark:text-gray-100">Basic Information</h3>
+                      <p className="text-gray-400 text-sm">Name, class and enrollment details</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Full Name *</label>
+                      <input value={studentForm.name} onChange={e => setStudentForm(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Rahim Ahmed" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold placeholder:text-gray-400 dark:text-gray-100" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Assign to Batch</label>
+                      <select value={studentForm.batchId} onChange={e => {
+                        const batch = batches.find(b => b.id === e.target.value);
+                        setStudentForm(p => ({ ...p, batchId: e.target.value, ...(batch ? { className: batch.className, monthlyFee: batch.monthlyFee.toString(), salaryType: batch.salaryType, classDays: [...batch.classDays] } : {}) }));
+                      }} className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold appearance-none dark:text-gray-100">
+                        <option value="">No Batch (Individual)</option>
+                        {batches.map(b => <option key={b.id} value={b.id}>{b.name} ({b.className})</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Class / Subject *</label>
+                      <select value={studentForm.className} onChange={e => setStudentForm(p => ({ ...p, className: e.target.value }))} className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold appearance-none dark:text-gray-100">
+                        <option value="">Select Class</option>
+                        {classesToUse.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Join Date *</label>
+                      <input type="date" value={studentForm.joinDate} onChange={e => setStudentForm(p => ({ ...p, joinDate: e.target.value }))} className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold dark:text-gray-100" />
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* Step 2: Schedule & Payment */}
+                {addStudentStep === 2 && (
+                  <motion.div key="step2" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
+                    <div className="text-center mb-6">
+                      <div className="w-12 h-12 bg-emerald-600 rounded-2xl flex items-center justify-center text-white mx-auto mb-3 shadow-lg shadow-emerald-200 dark:shadow-none"><Calendar size={22} /></div>
+                      <h3 className="font-black text-lg dark:text-gray-100">Schedule & Payment</h3>
+                      <p className="text-gray-400 text-sm">Class days and fee details</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Payment Type</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {[{ id: 'fixed', label: 'Fixed' }, { id: 'free', label: 'Free' }, { id: 'not-sure', label: 'Not Fixed' }].map(type => (
+                          <button key={type.id} type="button" onClick={() => setStudentForm(p => ({ ...p, salaryType: type.id as SalaryType }))}
+                            className={cn("py-3.5 rounded-2xl font-black text-xs uppercase tracking-tight transition-all border-2", studentForm.salaryType === type.id ? "bg-indigo-50 border-indigo-200 text-indigo-600 dark:bg-indigo-600/20 dark:border-indigo-500 dark:text-indigo-400" : "bg-gray-50 border-transparent text-gray-500 dark:bg-gray-800 dark:text-gray-400")}>
+                            {type.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {studentForm.salaryType === 'fixed' && (
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Monthly Fee (৳)</label>
+                        <input type="number" value={studentForm.monthlyFee} onChange={e => setStudentForm(p => ({ ...p, monthlyFee: e.target.value }))} placeholder="0" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold placeholder:text-gray-400 dark:text-gray-100" />
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Class Days</label>
+                      <div className="flex flex-wrap gap-2">
+                        {DAYS_OF_WEEK.map(day => (
+                          <button key={day} type="button" onClick={() => setStudentForm(p => ({ ...p, classDays: p.classDays.includes(day) ? p.classDays.filter(d => d !== day) : [...p.classDays, day] }))}
+                            className={cn("w-12 h-12 rounded-2xl font-black text-xs transition-all", studentForm.classDays.includes(day) ? "bg-indigo-600 text-white" : "bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400")}>
+                            {day.charAt(0)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* Step 3: Contact */}
+                {addStudentStep === 3 && (
+                  <motion.div key="step3" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
+                    <div className="text-center mb-6">
+                      <div className="w-12 h-12 bg-violet-600 rounded-2xl flex items-center justify-center text-white mx-auto mb-3 shadow-lg shadow-violet-200 dark:shadow-none"><Phone size={22} /></div>
+                      <h3 className="font-black text-lg dark:text-gray-100">Contact & Notes</h3>
+                      <p className="text-gray-400 text-sm">Phone, WhatsApp and additional info</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Phone Number</label>
+                      <input type="tel" value={studentForm.phone} onChange={e => setStudentForm(p => ({ ...p, phone: e.target.value }))} placeholder="017XXXXXXXX" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold placeholder:text-gray-400 dark:text-gray-100" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">WhatsApp Number</label>
+                      <input type="tel" value={studentForm.whatsapp} onChange={e => setStudentForm(p => ({ ...p, whatsapp: e.target.value }))} placeholder="880171XXXXXXX" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold placeholder:text-gray-400 dark:text-gray-100" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Additional Notes</label>
+                      <textarea value={studentForm.additionalInfo} onChange={e => setStudentForm(p => ({ ...p, additionalInfo: e.target.value }))} rows={3} placeholder="Any special notes..." className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold placeholder:text-gray-400 resize-none dark:text-gray-100" />
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* Validation notice */}
+                {addStudentStep === 1 && (!studentForm.name || !studentForm.className) && (
+                  <p className="text-[10px] text-amber-500 font-bold text-center">Please fill in Name and Class to continue</p>
+                )}
+
+                <button onClick={handleStudentSubmit} disabled={isSubmitting || (addStudentStep === 1 && (!studentForm.name || !studentForm.className))}
+                  className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-black text-base hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 dark:shadow-none active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                  {addStudentStep < 3 ? <><span>Continue</span><ChevronRight size={18} /></> : isSubmitting ? 'Saving...' : <><Check size={18} /><span>{view === 'add' ? 'Register Student' : 'Save Changes'}</span></>}
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* ─── Student Details ─── */}
+          {view === 'details' && selectedStudent && (
+            <motion.div key="details" initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.97 }} className="space-y-5">
+              <div className="flex items-center justify-between">
+                <button onClick={() => setView('main')} className="flex items-center gap-1.5 text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors font-bold text-xs uppercase tracking-widest">
+                  <ArrowLeft size={16} /><span>Back</span>
+                </button>
+                <div className="flex items-center gap-1.5">
+                  {selectedStudent.status === 'inactive' ? (
+                    <button onClick={() => { setRestoringStudentId(selectedStudent.id); setRestoreDate(format(new Date(), 'yyyy-MM-dd')); }} className="p-2 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-xl"><ArchiveRestore size={17} /></button>
+                  ) : (
+                    <button onClick={() => setView('edit')} className="p-2 text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded-xl"><Pencil size={17} /></button>
+                  )}
+                  <button onClick={() => setShowDeleteModal(true)} className="p-2 text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-xl"><Trash2 size={17} /></button>
+                </div>
+              </div>
+
+              {/* Profile card */}
+              <div className="bg-white dark:bg-[#1A1D23] rounded-2xl border border-gray-100 dark:border-gray-800/80 p-5 flex flex-col sm:flex-row items-center sm:items-start gap-4">
+                <div className="w-20 h-20 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-2xl flex items-center justify-center text-white text-3xl font-black shrink-0">{selectedStudent.name.charAt(0)}</div>
+                <div className="flex-1 text-center sm:text-left">
+                  <h2 className="text-2xl font-black tracking-tight dark:text-gray-100">{selectedStudent.name}</h2>
+                  <p className="text-indigo-600 dark:text-indigo-400 font-black text-sm uppercase tracking-widest mt-1">{selectedStudent.className}</p>
+                  {selectedStudent.status === 'inactive' && <Badge variant="danger" className="mt-2">Inactive</Badge>}
+                  <div className="flex items-center justify-center sm:justify-start gap-2 mt-3">
+                    {[{ label: format(parseISO(selectedStudent.joinDate), 'dd/MM/yy'), icon: <Calendar size={12} /> }, { label: selectedStudent.salaryType === 'fixed' ? `৳${selectedStudent.monthlyFee}/mo` : selectedStudent.salaryType, icon: <DollarSign size={12} /> }, { label: selectedStudent.classDays.join(', '), icon: <Clock size={12} /> }].map((item, i) => (
+                      <span key={i} className="flex items-center gap-1 bg-gray-50 dark:bg-gray-800 px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-gray-500 dark:text-gray-400">{item.icon}{item.label}</span>
+                    ))}
+                  </div>
+                  {(selectedStudent.phone || selectedStudent.whatsapp) && (
+                    <div className="flex gap-2 mt-3">
+                      {selectedStudent.phone && <a href={`tel:${selectedStudent.phone}`} className="flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 px-3 py-2 rounded-xl text-xs font-black"><Phone size={14} />Call</a>}
+                      {selectedStudent.whatsapp && <a href={`https://wa.me/${selectedStudent.whatsapp}`} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-3 py-2 rounded-xl text-xs font-black"><MessageCircle size={14} />WhatsApp</a>}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Financials */}
+              {(() => {
+                const fin = getStudentFinancials(selectedStudent);
+                return (
+                  <div className="grid grid-cols-3 gap-2.5">
+                    <div className="bg-indigo-600 rounded-2xl p-4"><p className="text-[9px] text-indigo-100 font-black uppercase tracking-widest mb-1">Total Paid</p><p className="text-lg font-black text-white truncate">৳{fin.totalPaid.toLocaleString()}</p></div>
+                    <div className={cn("rounded-2xl p-4 border", fin.dues > 0 ? "bg-rose-50 dark:bg-rose-500/10 border-rose-100 dark:border-rose-500/20" : "bg-white dark:bg-[#1A1D23] border-gray-100 dark:border-gray-800/80")}>
+                      <p className="text-[9px] font-black uppercase tracking-widest mb-1 text-gray-400">Dues</p>
+                      <p className={cn("text-lg font-black truncate", fin.dues > 0 ? "text-rose-600 dark:text-rose-400" : "text-gray-400")}>৳{fin.dues.toLocaleString()}</p>
+                    </div>
+                    <div className={cn("rounded-2xl p-4 border", fin.advance > 0 ? "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-100 dark:border-emerald-500/20" : "bg-white dark:bg-[#1A1D23] border-gray-100 dark:border-gray-800/80")}>
+                      <p className="text-[9px] font-black uppercase tracking-widest mb-1 text-gray-400">Advance</p>
+                      <p className={cn("text-lg font-black truncate", fin.advance > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-gray-400")}>৳{fin.advance.toLocaleString()}</p>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Record Payment */}
+              <div className="bg-white dark:bg-[#1A1D23] rounded-2xl border border-gray-100 dark:border-gray-800/80 p-4">
+                <div className="flex items-center gap-2 mb-4">
+                  <CreditCard size={16} className="text-indigo-600 dark:text-indigo-400" />
+                  <h3 className="font-black text-sm dark:text-gray-100">Record Payment</h3>
+                </div>
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  const fd = new FormData(e.currentTarget);
+                  addPayment(selectedStudent.id, Number(fd.get('amount')), fd.get('month') as string, fd.get('note') as string);
+                  e.currentTarget.reset();
+                }} className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Amount (৳)</label><input name="amount" type="number" required className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold dark:text-gray-100" placeholder="0" /></div>
+                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Month</label>
+                    <select name="month" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold appearance-none dark:text-gray-100">
+                      {getStudentFinancials(selectedStudent).billingMonths.map((d, i) => <option key={i} value={d.toISOString()}>{format(d, 'MMM yyyy')}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Note</label><input name="note" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl p-3 outline-none font-bold dark:text-gray-100" placeholder="Optional" /></div>
+                  <div className="flex items-end"><button type="submit" className="w-full bg-indigo-600 text-white py-3 rounded-xl font-black text-sm hover:bg-indigo-700 transition-all active:scale-[0.97] flex items-center justify-center gap-1.5"><Check size={16} />Pay</button></div>
+                </form>
+              </div>
+
+              {/* Payment History */}
+              <div className="bg-white dark:bg-[#1A1D23] rounded-2xl border border-gray-100 dark:border-gray-800/80 overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-50 dark:border-gray-800 flex items-center justify-between">
+                  <div className="flex items-center gap-2"><History size={14} className="text-indigo-600 dark:text-indigo-400" /><h3 className="font-black text-sm dark:text-gray-100">Transactions</h3></div>
+                  <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">{selectedStudent.payments.length} records</span>
+                </div>
+                <div className="divide-y divide-gray-50 dark:divide-gray-800/80 max-h-72 overflow-y-auto no-scrollbar">
+                  {selectedStudent.payments.length === 0 ? (
+                    <p className="p-8 text-center text-gray-400 text-sm font-medium">No transactions yet.</p>
+                  ) : (
+                    [...selectedStudent.payments].reverse().map(payment => (
+                      <button key={payment.id} onClick={() => handleOpenTransactionDetail(payment, selectedStudent.id)}
+                        className="w-full p-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors gap-3 text-left">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 bg-emerald-50 dark:bg-emerald-500/10 rounded-xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0"><DollarSign size={14} /></div>
+                          <div className="min-w-0">
+                            <p className="font-black text-sm dark:text-gray-100">৳{payment.amountPaid.toLocaleString()}</p>
+                            <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest truncate">{format(parseISO(payment.month), 'MMM yyyy')} • {format(parseISO(payment.date), 'dd/MM/yy')}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {payment.note && <span className="text-[9px] font-bold bg-gray-100 dark:bg-gray-800 text-gray-400 px-2 py-1 rounded-lg max-w-[80px] truncate">{payment.note}</span>}
+                          <ChevronRight size={14} className="text-gray-300 dark:text-gray-600" />
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Archive/Restore Modals */}
+              <AnimatePresence>
+                {showDeleteModal && (
+                  <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="bg-white dark:bg-gray-900 rounded-[2rem] p-7 max-w-sm w-full shadow-2xl border border-gray-100 dark:border-gray-800">
+                      <div className="w-14 h-14 bg-rose-50 dark:bg-rose-900/20 text-rose-600 rounded-2xl flex items-center justify-center mb-4 mx-auto"><Trash2 size={26} /></div>
+                      <h3 className="text-xl font-black text-center mb-2 dark:text-gray-100">Stop Teaching?</h3>
+                      <p className="text-gray-400 text-center mb-6 text-sm font-medium">Student will be archived. Payment history preserved.</p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <button onClick={() => setShowDeleteModal(false)} className="py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
+                        <button onClick={() => { archiveStudent(selectedStudent.id); setShowDeleteModal(false); setView('main'); }} className="py-3.5 bg-rose-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest">Archive</button>
+                      </div>
+                    </motion.div>
+                  </div>
+                )}
+                {restoringStudentId && (
+                  <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="bg-white dark:bg-gray-900 rounded-[2rem] p-7 max-w-sm w-full shadow-2xl border border-gray-100 dark:border-gray-800">
+                      <div className="w-14 h-14 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 rounded-2xl flex items-center justify-center mb-4 mx-auto"><UserPlus size={26} /></div>
+                      <h3 className="text-xl font-black text-center mb-2 dark:text-gray-100">Restore Student?</h3>
+                      <p className="text-gray-400 text-center mb-4 text-sm font-medium">Pick a new join date to restart billing.</p>
+                      <input type="date" value={restoreDate} onChange={e => setRestoreDate(e.target.value)} className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none font-bold dark:text-gray-100 mb-4" />
+                      <div className="grid grid-cols-2 gap-3">
+                        <button onClick={() => setRestoringStudentId(null)} className="py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
+                        <button onClick={() => { restoreStudent(restoringStudentId, new Date(restoreDate).toISOString()); setRestoringStudentId(null); setView('main'); setShowArchived(false); }} className="py-3.5 bg-emerald-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest">Restore</button>
+                      </div>
+                    </motion.div>
+                  </div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          )}
+
+          {/* ─── Batches ─── */}
+          {activeTab === 'batches' && (
+            <motion.div key="batches" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }} className="space-y-5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Layers size={20} className="text-indigo-600 dark:text-indigo-400" />
+                  <h2 className="text-xl font-black tracking-tight dark:text-gray-100">Batches</h2>
+                </div>
+                <button onClick={() => setView('add-batch')} className="p-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 dark:shadow-none"><Plus size={18} /></button>
+              </div>
+
+              {view === 'add-batch' ? (
+                <div className="bg-white dark:bg-[#1A1D23] rounded-2xl border border-gray-100 dark:border-gray-800/80 p-5">
+                  <div className="flex items-center gap-3 mb-6">
+                    <button onClick={() => setView('main')} className="p-2 bg-gray-100 dark:bg-gray-800 rounded-xl text-gray-400"><ArrowLeft size={18} /></button>
+                    <h3 className="font-black text-lg dark:text-gray-100">Create Batch</h3>
+                  </div>
+                  <form className="space-y-4" onSubmit={(e) => {
+                    e.preventDefault();
+                    if (isSubmitting) return; setIsSubmitting(true);
+                    const fd = new FormData(e.currentTarget);
+                    const name = fd.get('name') as string, className = fd.get('className') as string;
+                    const monthlyFee = Number(fd.get('monthlyFee')), salaryType = fd.get('salaryType') as SalaryType;
+                    const classDays = Array.from(fd.getAll('classDays')) as string[];
+                    if (name && className) { addBatch({ name, className, monthlyFee, salaryType, classDays }); setView('main'); }
+                    setIsSubmitting(false);
+                  }}>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Batch Name</label><input name="name" required placeholder="e.g. Morning Batch" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl px-4 py-3 font-bold outline-none focus:ring-2 focus:ring-indigo-500/10 dark:text-gray-100" /></div>
+                      <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Class</label><select name="className" required className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl px-4 py-3 font-bold outline-none appearance-none dark:text-gray-100">{classesToUse.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                      <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Monthly Fee</label><input name="monthlyFee" type="number" required placeholder="2000" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl px-4 py-3 font-bold outline-none dark:text-gray-100" /></div>
+                      <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Type</label><select name="salaryType" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl px-4 py-3 font-bold outline-none appearance-none dark:text-gray-100"><option value="fixed">Fixed</option><option value="free">Free</option><option value="not-sure">Not Sure</option></select></div>
+                    </div>
+                    <div className="space-y-2"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Class Days</label>
+                      <div className="flex flex-wrap gap-2">{DAYS_OF_WEEK.map(day => (<label key={day} className="cursor-pointer"><input type="checkbox" name="classDays" value={day} className="hidden peer" /><div className="px-3 py-2 rounded-xl bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-bold text-xs peer-checked:bg-indigo-600 peer-checked:text-white transition-all">{day}</div></label>))}</div>
+                    </div>
+                    <button type="submit" disabled={isSubmitting} className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-black text-sm uppercase tracking-widest hover:bg-indigo-700 transition-all disabled:opacity-50">Create Batch</button>
+                  </form>
+                </div>
+              ) : batches.length === 0 ? (
+                <div className="text-center py-16 bg-white dark:bg-[#1A1D23] rounded-2xl border-2 border-dashed border-gray-100 dark:border-gray-800">
+                  <Layers size={28} className="mx-auto mb-3 text-gray-300 dark:text-gray-600" />
+                  <p className="text-gray-400 font-medium text-sm">No batches yet. Create one!</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {batches.map(batch => {
+                    const batchStudents = students.filter(s => s.batchId === batch.id);
+                    return (
+                      <div key={batch.id} className="bg-white dark:bg-[#1A1D23] rounded-2xl border border-gray-100 dark:border-gray-800/80 p-4">
+                        <div className="flex justify-between items-start mb-3">
+                          <div>
+                            <h3 className="font-black text-base dark:text-gray-100">{batch.name}</h3>
+                            <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mt-0.5">{batch.className} • {batch.classDays.join(', ')}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black text-indigo-600 dark:text-indigo-400">৳{batch.monthlyFee}/mo</span>
+                            <button onClick={() => deleteBatch(batch.id)} className="p-1.5 bg-rose-50 dark:bg-rose-500/10 text-rose-500 rounded-lg"><Trash2 size={13} /></button>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5 items-center">
+                          {batchStudents.map(s => <span key={s.id} className="px-2.5 py-1.5 bg-gray-50 dark:bg-gray-800 rounded-lg text-[10px] font-bold text-gray-500 dark:text-gray-400">{s.name}</span>)}
+                          <button onClick={() => { setSelectedStudentId(null); setSelectedBatchId(batch.id); setActiveTab('students'); setView('add'); }} className="p-1.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-lg"><UserPlus size={13} /></button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {/* ─── Reports ─── */}
+          {activeTab === 'reports' && (
+            <motion.div key="reports" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }} className="space-y-6">
+              <div className="flex items-center gap-3">
+                <BarChart3 size={22} className="text-indigo-600 dark:text-indigo-400" />
+                <h2 className="text-xl font-black tracking-tight dark:text-gray-100">Financial Report</h2>
+              </div>
+
+              {/* Stats */}
+              <div className="grid grid-cols-2 gap-2.5">
+                {[
+                  { label: 'Expected', value: `৳${students.reduce((a, s) => a + getStudentFinancials(s).totalExpected, 0).toLocaleString()}`, color: 'text-indigo-600', icon: <TrendingUp className="w-3.5 h-3.5" /> },
+                  { label: 'Collected', value: `৳${students.reduce((a, s) => a + s.payments.reduce((pa, p) => pa + p.amountPaid, 0), 0).toLocaleString()}`, color: 'text-emerald-600', icon: <DollarSign className="w-3.5 h-3.5" /> },
+                  { label: 'Dues', value: `৳${students.reduce((a, s) => a + getStudentFinancials(s).dues, 0).toLocaleString()}`, color: 'text-rose-600', icon: <AlertCircle className="w-3.5 h-3.5" /> },
+                  { label: 'Advance', value: `৳${students.reduce((a, s) => a + getStudentFinancials(s).advance, 0).toLocaleString()}`, color: 'text-amber-600', icon: <Wallet className="w-3.5 h-3.5" /> }
+                ].map((s, i) => (
+                  <Card key={i} className="p-3.5 rounded-2xl">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-[9px] text-gray-400 font-black uppercase tracking-widest">{s.label}</p>
+                      <div className={cn("p-1 rounded-lg bg-gray-50 dark:bg-gray-800", s.color)}>{s.icon}</div>
+                    </div>
+                    <p className={cn("text-lg font-black tracking-tight", s.color)}>{s.value}</p>
+                  </Card>
+                ))}
+              </div>
+
+              {/* Recent Transactions */}
+              <div>
+                <h3 className="font-black text-sm text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3 px-1 flex items-center gap-2"><History size={13} />Recent Transactions</h3>
+                <div className="bg-white dark:bg-[#1A1D23] rounded-2xl border border-gray-100 dark:border-gray-800/80 overflow-hidden">
+                  {recentTransactions.length === 0 ? (
+                    <p className="p-8 text-center text-gray-400 text-sm font-medium">No transactions yet.</p>
+                  ) : (
+                    <div className="divide-y divide-gray-50 dark:divide-gray-800/80">
+                      {recentTransactions.map(tx => (
+                        <button key={tx.id} onClick={() => handleOpenTransactionDetail(tx, tx.studentId)}
+                          className="w-full p-3.5 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-9 h-9 bg-emerald-50 dark:bg-emerald-500/10 rounded-xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0"><DollarSign size={14} /></div>
+                            <div className="min-w-0">
+                              <p className="font-black text-sm dark:text-gray-100 truncate">{tx.studentName}</p>
+                              <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest">{format(parseISO(tx.month), 'MMM yyyy')} • {format(parseISO(tx.date), 'dd/MM/yy')}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="font-black text-emerald-600 dark:text-emerald-400 text-sm">৳{tx.amountPaid.toLocaleString()}</span>
+                            <ChevronRight size={14} className="text-gray-300 dark:text-gray-600" />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Student Ledger */}
+              <div>
+                <h3 className="font-black text-sm text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3 px-1 flex items-center gap-2"><FileText size={13} />Student Ledger</h3>
+                <div className="bg-white dark:bg-[#1A1D23] rounded-2xl border border-gray-100 dark:border-gray-800/80 overflow-hidden">
+                  <div className="divide-y divide-gray-50 dark:divide-gray-800/80">
+                    {students.map(s => {
+                      const fin = getStudentFinancials(s);
+                      return (
+                        <button key={s.id} onClick={() => { setSelectedStudentId(s.id); setActiveTab('students'); setView('details'); }}
+                          className="w-full p-3.5 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left">
+                          <div className="min-w-0">
+                            <p className="font-black text-sm dark:text-gray-100 truncate">{s.name}</p>
+                            <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest">{s.className}</p>
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <div className="text-right"><p className="text-[9px] text-gray-400 font-bold">Paid</p><p className="font-black text-sm text-emerald-600 dark:text-emerald-400">৳{fin.totalPaid.toLocaleString()}</p></div>
+                            <div className="text-right"><p className="text-[9px] text-gray-400 font-bold">Due</p><p className="font-black text-sm text-rose-600 dark:text-rose-400">৳{fin.dues.toLocaleString()}</p></div>
+                            <ChevronRight size={14} className="text-gray-300 dark:text-gray-600" />
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Class Distribution */}
+              <div>
+                <h3 className="font-black text-sm text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3 px-1 flex items-center gap-2"><Layers size={13} />Class Distribution</h3>
+                <div className="bg-white dark:bg-[#1A1D23] rounded-2xl border border-gray-100 dark:border-gray-800/80 p-4 space-y-3">
+                  {Array.from(new Set(students.filter(s => s.status === 'active').map(s => s.className))).map(cls => {
+                    const active = students.filter(s => s.status === 'active');
+                    const count = active.filter(s => s.className === cls).length;
+                    const pct = active.length > 0 ? (count / active.length) * 100 : 0;
+                    return (
+                      <div key={cls} className="space-y-1.5">
+                        <div className="flex justify-between text-xs font-black uppercase tracking-wider"><span className="dark:text-gray-100">{cls}</span><span className="text-gray-400">{count}</span></div>
+                        <div className="w-full bg-gray-100 dark:bg-gray-800 h-2 rounded-full overflow-hidden"><motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} className="bg-indigo-600 dark:bg-indigo-500 h-full rounded-full" /></div>
+                      </div>
                     );
                   })}
                 </div>
@@ -577,1254 +1052,183 @@ export default function App() {
             </motion.div>
           )}
 
-          {activeTab === 'students' && view === 'main' && (
-            <motion.div 
-              key="students"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="space-y-8"
-            >
-              {/* Search & Filter */}
-              <div className="relative group">
-                <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-indigo-500 transition-colors" size={20} />
-                <input 
-                  type="text" 
-                  placeholder="Search students or classes..."
-                  className="w-full bg-white dark:bg-[#1A1D23] border border-gray-100 dark:border-gray-800 rounded-[1.5rem] py-4 pl-14 pr-6 focus:outline-none focus:ring-4 focus:ring-indigo-500/5 transition-all shadow-sm text-base font-medium placeholder:text-gray-400 dark:text-gray-100"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
+          {/* ─── Settings ─── */}
+          {activeTab === 'settings' && (
+            <motion.div key="settings" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }} className="space-y-5 pb-4">
+              {/* Profile Header */}
+              <div className="flex items-center gap-4 px-1 py-2">
+                <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-white text-2xl font-black shrink-0 shadow-lg shadow-indigo-200/50 dark:shadow-none">{userProfile?.name.charAt(0)}</div>
+                <div>
+                  <h2 className="text-xl font-black tracking-tight dark:text-gray-100">{userProfile?.name}</h2>
+                  <p className="text-gray-400 font-medium text-sm">{userProfile?.title}</p>
+                </div>
               </div>
 
-              {/* Student List */}
-              <div className="space-y-4">
-                  <div className="flex items-center justify-between px-1">
-                    <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-                      <h2 className="font-black text-base sm:text-lg tracking-tight truncate flex items-center gap-2">
-                        {showArchived ? <Archive size={18} className="text-indigo-600" /> : <Users size={18} className="text-indigo-600" />}
-                        {showArchived ? 'Archived' : 'Directory'}
-                      </h2>
-                      <button 
-                        onClick={() => setShowArchived(!showArchived)}
-                        title={showArchived ? 'Show Active' : 'Show Archived'}
-                        className={cn(
-                          "p-1.5 rounded-lg transition-all shrink-0",
-                          showArchived ? "bg-indigo-600 text-white" : "bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
-                        )}
-                      >
-                        {showArchived ? <UserCheck size={14} /> : <Archive size={14} />}
-                      </button>
-                      <button 
-                        onClick={() => {
-                          setActiveTab('batches');
-                          setView('main');
-                        }}
-                        title="Manage Batches"
-                        className="p-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-all shrink-0"
-                      >
-                        <Layers size={14} />
-                      </button>
+              {/* Appearance */}
+              <div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 px-1">Appearance</p>
+                <div className="settings-section">
+                  <div className="settings-row">
+                    <div className="flex items-center gap-3">
+                      {darkMode ? <Moon size={18} className="text-amber-400" /> : <Sun size={18} className="text-amber-500" />}
+                      <div><p className="font-bold text-sm dark:text-gray-100">Dark Mode</p><p className="text-[10px] text-gray-400 font-medium">{darkMode ? 'Enabled' : 'Disabled'}</p></div>
                     </div>
-                    <span className="text-[9px] sm:text-[10px] font-bold text-gray-500 uppercase tracking-widest shrink-0 flex items-center gap-1">
-                      <Users size={12} />
-                      {filteredStudents.length}
-                    </span>
-                  </div>
-                
-                {filteredStudents.length === 0 ? (
-                  <div className="text-center py-16 bg-white dark:bg-[#1A1D23] rounded-[1.5rem] border-2 border-dashed border-gray-100 dark:border-gray-800">
-                    <div className="w-16 h-16 bg-gray-50 dark:bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-4 text-gray-400 dark:text-gray-500">
-                      <Users size={32} />
-                    </div>
-                    <p className="text-gray-500 font-medium text-sm">No students found matching your search.</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {filteredStudents.map(student => {
-                      const financials = getStudentFinancials(student);
-                      return (
-                        <Card key={student.id} className="hover:ring-4 hover:ring-indigo-500/5 transition-all cursor-pointer group border-none shadow-sm rounded-[1.25rem] sm:rounded-[1.5rem]">
-                          <div 
-                            className="p-3 sm:p-4 flex items-center justify-between"
-                            onClick={() => {
-                              setSelectedStudentId(student.id);
-                              setView('details');
-                            }}
-                          >
-                            <div className="flex flex-col min-w-0">
-                              <h3 className="font-black text-base sm:text-lg group-hover:text-indigo-600 transition-colors leading-tight truncate dark:text-white">{student.name}</h3>
-                              <p className="text-[9px] sm:text-[10px] text-gray-700 font-bold mt-0.5 uppercase tracking-wider truncate dark:text-gray-400">{student.className} • {student.classDays.join(', ')}</p>
-                            </div>
-                            
-                            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-                              {student.salaryType === 'fixed' ? (
-                                financials.dues > 0 ? (
-                                  <div className="bg-rose-50 text-rose-600 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest dark:bg-rose-500/10 dark:text-rose-400">
-                                    Due ৳{financials.dues.toLocaleString()}
-                                  </div>
-                                ) : financials.advance > 0 ? (
-                                  <div className="bg-amber-50 text-amber-600 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest dark:bg-amber-500/10 dark:text-amber-400">
-                                    Adv ৳{financials.advance.toLocaleString()}
-                                  </div>
-                                ) : financials.totalPaid > 0 ? (
-                                  <div className="bg-emerald-50 text-emerald-600 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest dark:bg-emerald-500/10 dark:text-emerald-400">
-                                    Paid
-                                  </div>
-                                ) : (
-                                  <div className="bg-gray-50 text-gray-700 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest dark:bg-gray-800 dark:text-gray-400">
-                                    No Dues
-                                  </div>
-                                )
-                              ) : (
-                                <div className="bg-gray-50 text-gray-700 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest dark:bg-gray-800 dark:text-gray-400">
-                                  {student.salaryType === 'free' ? 'Free' : 'Not Fixed'}
-                                </div>
-                              )}
-                              <ChevronRight size={16} className="text-gray-600 group-hover:text-indigo-600 transition-colors dark:text-gray-500" />
-                            </div>
-                          </div>
-                        </Card>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          )}
-
-          {(view === 'add' || view === 'edit') && (
-            <motion.div 
-              key={view}
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="max-w-3xl mx-auto"
-            >
-              <button onClick={() => {
-                setView(view === 'edit' ? 'details' : 'main');
-                setSelectedBatchId(null);
-              }} className="flex items-center gap-2 text-gray-700 mb-8 hover:text-gray-900 transition-colors font-bold text-sm uppercase tracking-widest">
-                <ArrowLeft size={16} />
-                <span>Back</span>
-              </button>
-
-              <Card className="p-5 sm:p-10 border-none shadow-xl rounded-[2.5rem]">
-                <div className="flex items-center gap-4 mb-8 sm:mb-10">
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-indigo-100 shrink-0">
-                    {view === 'add' ? <UserPlus size={20} /> : <Users size={20} />}
-                  </div>
-                  <div>
-                    <h2 className="text-2xl sm:text-3xl font-black tracking-tight">{view === 'add' ? 'New Student' : 'Edit Student'}</h2>
-                    <p className="text-gray-700 font-medium text-xs sm:text-sm">
-                      {view === 'add' ? 'Fill in the details to register a new student.' : `Updating information for ${selectedStudent?.name}`}
-                    </p>
+                    <button onClick={() => setDarkMode(!darkMode)} className={cn("w-12 h-6 rounded-full transition-all relative shrink-0", darkMode ? "bg-indigo-600" : "bg-gray-300 dark:bg-gray-700")}>
+                      <div className={cn("w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all shadow", darkMode ? "left-6" : "left-0.5")} />
+                    </button>
                   </div>
                 </div>
+              </div>
 
-                <form className="space-y-8" onSubmit={(e) => {
-                  e.preventDefault();
-                  if (isSubmitting) return;
-                  setIsSubmitting(true);
-
-                  const formData = new FormData(e.currentTarget);
-                  const days = DAYS_OF_WEEK.filter(day => formData.get(`day-${day}`));
-                  
-                  const selectedBatch = batches.find(b => b.id === (formData.get('batchId') as string));
-                  
-                  const studentData = {
-                    name: formData.get('name') as string,
-                    className: formData.get('className') as string,
-                    joinDate: formData.get('joinDate') as string,
-                    phone: formData.get('phone') as string,
-                    whatsapp: formData.get('whatsapp') as string,
-                    classDays: days,
-                    salaryType: formData.get('salaryType') as SalaryType,
-                    monthlyFee: Number(formData.get('monthlyFee') || 0),
-                    additionalInfo: formData.get('additionalInfo') as string,
-                    batchId: formData.get('batchId') as string || undefined,
-                  };
-
-                  if (view === 'add') {
-                    addStudent(studentData);
-                    setView('main');
-                    setActiveTab('students');
-                    setSelectedBatchId(null);
-                    setSelectedStudentId(null);
-                  } else if (view === 'edit' && selectedStudentId) {
-                    updateStudent(selectedStudentId, studentData);
-                    setView('details');
-                  }
-                  setIsSubmitting(false);
-                }}>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    <div className="space-y-2">
-                      <label className="text-xs font-black text-gray-700 uppercase tracking-widest ml-1 dark:text-gray-400">Full Name</label>
-                      <input name="name" required defaultValue={selectedStudent?.name} className="w-full bg-gray-50 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold placeholder:text-gray-500 dark:bg-gray-800 dark:text-gray-100 dark:placeholder:text-gray-600" placeholder="e.g. Rahim Ahmed" />
+              {/* Notifications */}
+              <div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 px-1">Notifications</p>
+                <div className="settings-section">
+                  <div className="settings-row">
+                    <div className="flex items-center gap-3">
+                      <Bell size={18} className="text-indigo-500" />
+                      <div><p className="font-bold text-sm dark:text-gray-100">Payment Reminders</p><p className="text-[10px] text-gray-400 font-medium">{notificationsEnabled ? 'Active' : 'Disabled'}</p></div>
                     </div>
+                    <button onClick={async () => {
+                      if (!notificationsEnabled) {
+                        const g = await requestNotificationPermission();
+                        if (g) { setNotificationsEnabled(true); setNotificationPermission(true); localStorage.setItem('tution_notifications_enabled', 'true'); await schedulePaymentReminders(students); }
+                      } else { setNotificationsEnabled(false); localStorage.setItem('tution_notifications_enabled', 'false'); }
+                    }} className={cn("w-12 h-6 rounded-full transition-all relative shrink-0", notificationsEnabled ? "bg-indigo-600" : "bg-gray-300 dark:bg-gray-700")}>
+                      <div className={cn("w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all shadow", notificationsEnabled ? "left-6" : "left-0.5")} />
+                    </button>
+                  </div>
+                  <div className="settings-divider" />
+                  <button onClick={sendTestNotification} disabled={!notificationsEnabled} className="settings-row w-full disabled:opacity-40">
+                    <div className="flex items-center gap-3"><Bell size={18} className="text-gray-400" /><p className="font-bold text-sm dark:text-gray-100">Send Test Notification</p></div>
+                    <ChevronRight size={16} className="text-gray-300 dark:text-gray-600" />
+                  </button>
+                </div>
+              </div>
 
-                    <div className="space-y-2">
-                      <label className="text-xs font-black text-gray-700 uppercase tracking-widest ml-1 dark:text-gray-400">Assign to Batch (Optional)</label>
-                      <select 
-                        name="batchId" 
-                        defaultValue={selectedBatchId || selectedStudent?.batchId || ""} 
-                        onChange={(e) => {
-                          const batchId = e.target.value;
-                          const batch = batches.find(b => b.id === batchId);
-                          if (batch && view === 'add') {
-                            const form = e.currentTarget.form;
-                            if (form) {
-                              const classNameSelect = form.elements.namedItem('className') as HTMLSelectElement;
-                              const feeInput = form.elements.namedItem('monthlyFee') as HTMLInputElement;
-                              
-                              if (classNameSelect) classNameSelect.value = batch.className;
-                              if (feeInput) feeInput.value = batch.monthlyFee.toString();
-                              
-                              setSalaryType(batch.salaryType);
-                              
-                              DAYS_OF_WEEK.forEach(day => {
-                                const checkbox = form.elements.namedItem(`day-${day}`) as HTMLInputElement;
-                                if (checkbox) checkbox.checked = batch.classDays.includes(day);
-                              });
-                            }
-                          }
-                        }}
-                        className="w-full bg-gray-50 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold appearance-none dark:bg-gray-800 dark:text-gray-100"
-                      >
-                        <option value="">No Batch (Individual)</option>
-                        {batches.map(b => <option key={b.id} value={b.id}>{b.name} ({b.className})</option>)}
-                      </select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-xs font-black text-gray-700 uppercase tracking-widest ml-1 dark:text-gray-400">Class / Subject</label>
-                      <select 
-                        name="className" 
-                        required 
-                        defaultValue={
-                          (view === 'add' && selectedBatchId ? batches.find(b => b.id === selectedBatchId)?.className : selectedStudent?.className) || ""
-                        } 
-                        className="w-full bg-gray-50 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold appearance-none dark:bg-gray-800 dark:text-gray-100"
-                      >
-                        <option value="">Select Class</option>
-                        {classesToUse.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-black text-gray-700 uppercase tracking-widest ml-1 dark:text-gray-400">Join Date</label>
-                      <input name="joinDate" type="date" required defaultValue={selectedStudent?.joinDate || new Date().toISOString().split('T')[0]} className="w-full bg-gray-50 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold dark:bg-gray-800 dark:text-gray-100" />
-                    </div>
-                    
-                    <div className="space-y-2">
-                      <label className="text-xs font-black text-gray-700 uppercase tracking-widest ml-1 dark:text-gray-400">Salary Type</label>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        {[
-                          { id: 'fixed', label: 'Fixed' },
-                          { id: 'free', label: 'Free' },
-                          { id: 'not-sure', label: 'Not Fixed' }
-                        ].map(type => (
-                          <label key={type.id} className={cn(
-                            "flex items-center justify-center gap-2 p-4 rounded-2xl cursor-pointer transition-all border-2",
-                            salaryType === type.id 
-                              ? "bg-indigo-50 border-indigo-200 text-indigo-600 dark:bg-indigo-600/20 dark:border-indigo-500 dark:text-indigo-400" 
-                              : "bg-gray-50 border-transparent text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
-                          )}>
-                            <input 
-                              type="radio" 
-                              name="salaryType" 
-                              value={type.id} 
-                              checked={salaryType === type.id} 
-                              onChange={() => setSalaryType(type.id as SalaryType)}
-                              className="hidden" 
-                            />
-                            <span className="text-xs font-black uppercase tracking-tighter">{type.label}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-
-                    {salaryType === 'fixed' && (
-                      <motion.div 
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="space-y-2"
-                      >
-                        <label className="text-xs font-black text-gray-700 uppercase tracking-widest ml-1 dark:text-gray-400">Monthly Fee (৳)</label>
-                        <input 
-                          name="monthlyFee" 
-                          type="number" 
-                          required 
-                          defaultValue={
-                            (view === 'add' && selectedBatchId ? batches.find(b => b.id === selectedBatchId)?.monthlyFee : selectedStudent?.monthlyFee) || ""
-                          } 
-                          className="w-full bg-gray-50 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold placeholder:text-gray-500 dark:bg-gray-800 dark:text-gray-100 dark:placeholder:text-gray-600" 
-                          placeholder="0" 
-                        />
+              {/* Class/Batch Management (collapsible) */}
+              <div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 px-1">Classes & Batches</p>
+                <div className="settings-section">
+                  <button onClick={() => setShowBatchManagement(!showBatchManagement)} className="settings-row w-full">
+                    <div className="flex items-center gap-3"><Layers size={18} className="text-indigo-500" /><p className="font-bold text-sm dark:text-gray-100">Manage Classes</p></div>
+                    {showBatchManagement ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+                  </button>
+                  <AnimatePresence>
+                    {showBatchManagement && (
+                      <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                        <div className="settings-divider" />
+                        <div className="p-4 space-y-3">
+                          <div className="flex flex-wrap gap-2">
+                            {classesToUse.map(cls => (
+                              <div key={cls} className="bg-gray-50 dark:bg-gray-800 px-3 py-1.5 rounded-xl border border-gray-100 dark:border-gray-700 flex items-center gap-1.5">
+                                <span className="text-xs font-bold dark:text-gray-100">{cls}</span>
+                                <button onClick={() => handleSaveClasses(classesToUse.filter(c => c !== cls))} className="text-gray-400 hover:text-rose-500 dark:hover:text-rose-400"><X size={12} /></button>
+                              </div>
+                            ))}
+                          </div>
+                          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); const input = (e.currentTarget.elements.namedItem('newClass') as HTMLInputElement); if (input.value.trim()) { handleSaveClasses([...classesToUse, input.value.trim()]); input.value = ''; } }}>
+                            <input name="newClass" placeholder="Add class..." className="flex-1 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-700 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-500/10 dark:text-gray-100" />
+                            <button type="submit" className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-black text-xs shrink-0">Add</button>
+                          </form>
+                        </div>
                       </motion.div>
                     )}
+                  </AnimatePresence>
+                </div>
+              </div>
 
-                    <div className="space-y-2">
-                      <label className="text-xs font-black text-gray-700 uppercase tracking-widest ml-1 dark:text-gray-400">Phone Number</label>
-                      <input name="phone" defaultValue={selectedStudent?.phone} className="w-full bg-gray-50 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold placeholder:text-gray-500 dark:bg-gray-800 dark:text-gray-100 dark:placeholder:text-gray-600" placeholder="017XXXXXXXX" />
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-xs font-black text-gray-700 uppercase tracking-widest ml-1 dark:text-gray-400">WhatsApp Number</label>
-                      <input name="whatsapp" defaultValue={selectedStudent?.whatsapp} className="w-full bg-gray-50 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold placeholder:text-gray-500 dark:bg-gray-800 dark:text-gray-100 dark:placeholder:text-gray-600" placeholder="880171XXXXXXX (country code)" />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-xs font-black text-gray-500 uppercase tracking-widest ml-1 dark:text-gray-400">Additional Notes (Optional)</label>
-                    <textarea name="additionalInfo" defaultValue={selectedStudent?.additionalInfo} rows={3} className="w-full bg-gray-50 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold placeholder:text-gray-400 resize-none dark:bg-gray-800 dark:text-gray-100 dark:placeholder:text-gray-600" placeholder="কোনো বিশেষ তথ্য, বিষয়, বা টীকা..." />
-                  </div>
-
-                  <div className="space-y-4">
-                    <label className="text-xs font-black text-gray-500 uppercase tracking-widest ml-1 dark:text-gray-400">Class Schedule</label>
-                    <div className="flex flex-wrap gap-3">
-                      {DAYS_OF_WEEK.map(day => {
-                        const isSelectedByBatch = view === 'add' && selectedBatchId && batches.find(b => b.id === selectedBatchId)?.classDays.includes(day);
-                        const isSelectedByStudent = selectedStudent?.classDays.includes(day);
-                        
-                        return (
-                          <label key={day} className="group relative flex items-center justify-center w-12 h-12 rounded-2xl cursor-pointer transition-all overflow-hidden">
-                            <input 
-                              type="checkbox" 
-                              name={`day-${day}`} 
-                              defaultChecked={isSelectedByBatch || isSelectedByStudent} 
-                              className="peer hidden" 
-                            />
-                            <div className="absolute inset-0 bg-gray-50 border-2 border-transparent peer-checked:bg-indigo-600 peer-checked:border-indigo-600 transition-all dark:bg-gray-800" />
-                            <span className="relative text-xs font-black peer-checked:text-white transition-colors dark:text-gray-400">{day.charAt(0)}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <button 
-                    type="submit" 
-                    disabled={isSubmitting}
-                    className="w-full bg-indigo-600 text-white py-5 rounded-[2rem] font-black text-xl hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 dark:shadow-none active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isSubmitting ? 'Saving...' : (view === 'add' ? 'Register Student' : 'Save Changes')}
+              {/* Data */}
+              <div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 px-1">Data</p>
+                <div className="settings-section">
+                  <button onClick={handleExportData} className="settings-row w-full">
+                    <div className="flex items-center gap-3"><Download size={18} className="text-indigo-500" /><div><p className="font-bold text-sm dark:text-gray-100">Backup Data</p><p className="text-[10px] text-gray-400 font-medium">Download JSON file</p></div></div>
+                    <ChevronRight size={16} className="text-gray-300 dark:text-gray-600" />
                   </button>
-                </form>
-              </Card>
-            </motion.div>
-          )}
+                  <div className="settings-divider" />
+                  <label className="settings-row cursor-pointer">
+                    <input type="file" accept=".json" onChange={handleImportData} className="hidden" />
+                    <div className="flex items-center gap-3"><Upload size={18} className="text-emerald-500" /><div><p className="font-bold text-sm dark:text-gray-100">Restore Data</p><p className="text-[10px] text-gray-400 font-medium">Upload from file</p></div></div>
+                    <ChevronRight size={16} className="text-gray-300 dark:text-gray-600" />
+                  </label>
+                </div>
+              </div>
 
-          {view === 'details' && selectedStudent && (
-            <motion.div 
-              key="details"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="space-y-8"
-            >
-              <div className="flex items-center justify-between">
-                <button onClick={() => {
-                  setActiveTab('dashboard');
-                  setView('main');
-                }} className="flex items-center gap-2 text-gray-400 dark:text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 transition-colors font-bold text-sm uppercase tracking-widest">
-                  <ArrowLeft size={16} />
-                  <span className="hidden sm:inline">Dashboard</span>
-                </button>
-                <div className="flex items-center gap-2">
-                  {selectedStudent.status === 'inactive' ? (
-                    <button 
-                      onClick={() => {
-                        setRestoringStudentId(selectedStudent.id);
-                        setRestoreDate(format(new Date(), 'yyyy-MM-dd'));
-                      }}
-                      title="Restore Student"
-                      className="p-2 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-xl hover:bg-emerald-100 dark:hover:bg-emerald-500/20 transition-all"
-                    >
-                      <ArchiveRestore size={18} />
-                    </button>
-                  ) : (
-                    <button 
-                      onClick={() => setView('edit')}
-                      className="text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 p-3 rounded-2xl transition-all"
-                      title="Edit Student"
-                    >
-                      <Pencil size={20} />
-                    </button>
-                  )}
-                  <button 
-                    onClick={() => setShowDeleteModal(true)}
-                    className="text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10 p-3 rounded-2xl transition-all"
-                  >
-                    <Trash2 size={20} />
+              {/* About */}
+              <div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 px-1">About</p>
+                <div className="settings-section">
+                  <button onClick={() => setShowAppInfo(true)} className="settings-row w-full">
+                    <div className="flex items-center gap-3"><Info size={18} className="text-blue-500" /><div><p className="font-bold text-sm dark:text-gray-100">App Info</p><p className="text-[10px] text-gray-400 font-medium">Version 1.0.0</p></div></div>
+                    <ChevronRight size={16} className="text-gray-300 dark:text-gray-600" />
+                  </button>
+                  <div className="settings-divider" />
+                  <button onClick={() => setShowDevInfo(true)} className="settings-row w-full">
+                    <div className="flex items-center gap-3"><User size={18} className="text-purple-500" /><div><p className="font-bold text-sm dark:text-gray-100">Developer</p><p className="text-[10px] text-gray-400 font-medium">Joy Krishna Malakar</p></div></div>
+                    <ChevronRight size={16} className="text-gray-300 dark:text-gray-600" />
+                  </button>
+                  <div className="settings-divider" />
+                  <button onClick={() => setShowShareModal(true)} className="settings-row w-full">
+                    <div className="flex items-center gap-3"><Share2 size={18} className="text-indigo-500" /><p className="font-bold text-sm dark:text-gray-100">Share App</p></div>
+                    <ChevronRight size={16} className="text-gray-300 dark:text-gray-600" />
                   </button>
                 </div>
               </div>
 
-              {/* Delete Confirmation Modal */}
-              <AnimatePresence>
-                {showDeleteModal && (
-                  <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-                    <motion.div 
-                      initial={{ opacity: 0, scale: 0.9 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.9 }}
-                      className="bg-white dark:bg-gray-900 rounded-[2.5rem] p-8 max-w-sm w-full shadow-2xl border border-transparent dark:border-gray-800"
-                    >
-                      <div className="w-16 h-16 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-2xl flex items-center justify-center mb-6 mx-auto">
-                        <Trash2 size={32} />
-                      </div>
-                      <h3 className="text-2xl font-black text-center mb-2 dark:text-gray-100">Stop Teaching?</h3>
-                      <p className="text-gray-400 dark:text-gray-500 text-center mb-8 font-medium">This student will be moved to the archive. Their payment history and logs will be preserved.</p>
-                      <div className="grid grid-cols-2 gap-4">
-                        <button 
-                          onClick={() => setShowDeleteModal(false)}
-                          className="py-4 bg-gray-50 dark:bg-gray-800 text-gray-400 dark:text-gray-500 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
-                        >
-                          Cancel
-                        </button>
-                        <button 
-                          onClick={() => {
-                            archiveStudent(selectedStudent.id);
-                            setShowDeleteModal(false);
-                            setView('main');
-                          }}
-                          className="py-4 bg-rose-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-rose-700 transition-all shadow-lg shadow-rose-100 dark:shadow-none"
-                        >
-                          Archive
-                        </button>
-                      </div>
-                    </motion.div>
-                  </div>
-                )}
-
-                {restoringStudentId && (
-                  <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-                    <motion.div 
-                      initial={{ opacity: 0, scale: 0.9 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.9 }}
-                      className="bg-white dark:bg-gray-900 rounded-[2.5rem] p-8 max-w-sm w-full shadow-2xl border border-transparent dark:border-gray-800"
-                    >
-                      <div className="w-16 h-16 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-2xl flex items-center justify-center mb-6 mx-auto">
-                        <UserPlus size={32} />
-                      </div>
-                      <h3 className="text-2xl font-black text-center mb-2 dark:text-gray-100">Restore Student?</h3>
-                      <p className="text-gray-400 dark:text-gray-500 text-center mb-8 font-medium">Pick a new join date for this student to restart their billing cycle.</p>
-                      
-                      <div className="space-y-2 mb-8">
-                        <label className="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">New Join Date</label>
-                        <input 
-                          type="date" 
-                          value={restoreDate}
-                          onChange={(e) => setRestoreDate(e.target.value)}
-                          className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 focus:ring-2 focus:ring-emerald-500/10 outline-none font-bold dark:text-gray-100"
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-4">
-                        <button 
-                          onClick={() => setRestoringStudentId(null)}
-                          className="py-4 bg-gray-50 dark:bg-gray-800 text-gray-400 dark:text-gray-500 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
-                        >
-                          Cancel
-                        </button>
-                        <button 
-                          onClick={() => {
-                            if (restoringStudentId) {
-                              restoreStudent(restoringStudentId, new Date(restoreDate).toISOString());
-                              setRestoringStudentId(null);
-                              setView('main');
-                              setShowArchived(false);
-                            }
-                          }}
-                          className="py-4 bg-emerald-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 dark:shadow-none"
-                        >
-                          Confirm
-                        </button>
-                      </div>
-                    </motion.div>
-                  </div>
-                )}
-              </AnimatePresence>
-
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8">
-                {/* Profile Section */}
-                <div className="lg:col-span-4 space-y-6">
-                  <Card className="p-6 sm:p-8 border-none shadow-sm rounded-[2.5rem] text-center">
-                    <div className="w-24 h-24 sm:w-28 sm:h-28 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-[2rem] mx-auto flex items-center justify-center text-white text-3xl sm:text-4xl font-black shadow-2xl shadow-indigo-200 mb-6">
-                      {selectedStudent.name.charAt(0)}
-                    </div>
-                    <h2 className="text-2xl sm:text-3xl font-black tracking-tight mb-1 truncate px-2 dark:text-gray-100">{selectedStudent.name}</h2>
-                    <div className="flex flex-col items-center gap-2 mb-6">
-                      <p className="text-indigo-600 font-black text-xs sm:text-sm uppercase tracking-widest">{selectedStudent.className}</p>
-                      {selectedStudent.status === 'inactive' && (
-                        <Badge variant="danger">Inactive / Archived</Badge>
-                      )}
-                    </div>
-                    
-                    <div className="mt-8 pt-8 border-t border-gray-100 dark:border-gray-800 space-y-6">
-                      <div className="flex justify-center gap-4">
-                        {selectedStudent.phone && (
-                          <a href={`tel:${selectedStudent.phone}`} className="flex-1 h-14 bg-indigo-50 text-indigo-700 rounded-2xl flex items-center justify-center gap-2 transition-all hover:bg-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-400 dark:hover:bg-indigo-500/20 shadow-sm shadow-indigo-100 dark:shadow-none font-black text-xs uppercase tracking-widest">
-                            <Phone size={18} />
-                            <span>Call</span>
-                          </a>
-                        )}
-                        {selectedStudent.whatsapp && (
-                          <a href={`https://wa.me/${selectedStudent.whatsapp}`} target="_blank" rel="noreferrer" className="flex-1 h-14 bg-emerald-50 text-emerald-700 rounded-2xl flex items-center justify-center gap-2 transition-all hover:bg-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/20 shadow-sm shadow-emerald-100 dark:shadow-none font-black text-xs uppercase tracking-widest">
-                            <MessageCircle size={18} />
-                            <span>WhatsApp</span>
-                          </a>
-                        )}
-                      </div>
-                      
-                      <div className="space-y-3">
-                        {[
-                          { label: 'Joined', value: format(parseISO(selectedStudent.joinDate), 'dd/MM/yyyy'), icon: <Calendar size={14} /> },
-                          { label: 'Fee', value: selectedStudent.salaryType === 'fixed' ? `৳${selectedStudent.monthlyFee}` : selectedStudent.salaryType === 'not-sure' ? 'Not Fixed' : 'Free', icon: <DollarSign size={14} /> },
-                          { label: 'Schedule', value: selectedStudent.classDays.join(', '), icon: <Clock size={14} /> }
-                        ].map((item, i) => (
-                          <div key={i} className="flex items-center justify-between bg-gray-50/80 dark:bg-gray-800/80 p-4 rounded-2xl border border-gray-100 dark:border-gray-700">
-                            <div className="flex items-center gap-3">
-                              <span className="text-indigo-600 dark:text-indigo-400">{item.icon}</span>
-                              <span className="text-[10px] font-black text-gray-700 dark:text-gray-400 uppercase tracking-[0.15em]">{item.label}</span>
-                            </div>
-                            <span className="font-black text-sm text-gray-900 dark:text-gray-100">{item.value}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </Card>
-                </div>
-
-                {/* Financial Section */}
-                <div className="lg:col-span-8 space-y-8">
-                  <div className="grid grid-cols-3 gap-3">
-                    {(() => {
-                      const financials = getStudentFinancials(selectedStudent);
-                      return (
-                        <>
-                          <Card className="p-3 sm:p-6 border-none shadow-sm bg-indigo-600 text-white rounded-2xl sm:rounded-3xl">
-                            <p className="text-[8px] sm:text-[10px] opacity-60 font-black uppercase tracking-widest mb-1">Total Paid</p>
-                            <p className="text-lg sm:text-3xl font-black tracking-tight truncate">৳{financials.totalPaid.toLocaleString()}</p>
-                          </Card>
-                          <Card className={cn("p-3 sm:p-4 border-none shadow-sm rounded-xl sm:rounded-2xl", financials.dues > 0 ? "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400" : "bg-white text-gray-500 dark:bg-gray-800 dark:text-gray-400")}>
-                            <p className="text-[8px] opacity-60 font-black uppercase tracking-widest mb-1">Dues</p>
-                            <p className="text-base sm:text-2xl font-black tracking-tight truncate">৳{financials.dues.toLocaleString()}</p>
-                          </Card>
-                          <Card className={cn("p-3 sm:p-4 border-none shadow-sm rounded-xl sm:rounded-2xl", financials.advance > 0 ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400" : "bg-white text-gray-500 dark:bg-gray-800 dark:text-gray-400")}>
-                            <p className="text-[8px] opacity-60 font-black uppercase tracking-widest mb-1">Advance</p>
-                            <p className="text-base sm:text-2xl font-black tracking-tight truncate">৳{financials.advance.toLocaleString()}</p>
-                          </Card>
-                        </>
-                      );
-                    })()}
-                  </div>
-
-                  {/* Payment Action */}
-                  <Card className="p-6 border-none shadow-sm rounded-[1.5rem] dark:bg-gray-900 dark:border dark:border-gray-800">
-                    <div className="flex items-center gap-3 mb-6">
-                      <div className="w-9 h-9 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl flex items-center justify-center text-indigo-600 dark:text-indigo-400">
-                        <CreditCard size={18} />
-                      </div>
-                      <h3 className="text-lg font-black tracking-tight dark:text-gray-100">Record Payment</h3>
-                    </div>
-                    
-                    <form className="grid grid-cols-1 sm:grid-cols-2 gap-4" onSubmit={(e) => {
-                      e.preventDefault();
-                      const formData = new FormData(e.currentTarget);
-                      addPayment(
-                        selectedStudent.id, 
-                        Number(formData.get('amount')), 
-                        formData.get('month') as string,
-                        formData.get('note') as string
-                      );
-                      e.currentTarget.reset();
-                    }}>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest ml-1">Amount (৳)</label>
-                        <input name="amount" type="number" required className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold dark:text-gray-100" placeholder="0" />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest ml-1">Billing Month</label>
-                        <select name="month" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold appearance-none dark:text-gray-100">
-                          {getStudentFinancials(selectedStudent).billingMonths.map((date, i) => (
-                            <option key={i} value={date.toISOString()}>
-                              {format(date, 'MMMM yyyy')}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest ml-1">Note</label>
-                        <input name="note" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 focus:ring-2 focus:ring-indigo-500/10 outline-none font-bold dark:text-gray-100" placeholder="Optional" />
-                      </div>
-                      <div className="sm:col-span-2">
-                        <button type="submit" className="w-full bg-indigo-600 dark:bg-indigo-500 text-white py-4 rounded-2xl font-black text-lg hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all shadow-lg shadow-indigo-100 dark:shadow-none active:scale-[0.98] flex items-center justify-center gap-2">
-                          <Check size={20} />
-                          Confirm Payment
-                        </button>
-                      </div>
-                    </form>
-                  </Card>
-
-                  {/* Payment History */}
-                  <Card className="border-none shadow-sm rounded-[1.5rem] overflow-hidden dark:bg-gray-900 dark:border dark:border-gray-800">
-                    <div className="p-4 border-b border-gray-50 dark:border-gray-800 flex items-center justify-between bg-gray-50/30 dark:bg-gray-800/30">
-                      <div className="flex items-center gap-2">
-                        <FileText size={16} className="text-indigo-600 dark:text-indigo-400" />
-                        <h3 className="font-black tracking-tight text-sm dark:text-gray-100">Transaction History</h3>
-                      </div>
-                      <span className="text-[9px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest">{selectedStudent.payments.length} Records</span>
-                    </div>
-                    <div className="divide-y divide-gray-50 dark:divide-gray-800 max-h-[350px] overflow-y-auto no-scrollbar">
-                      {selectedStudent.payments.length === 0 ? (
-                        <div className="p-10 text-center text-gray-400 dark:text-gray-500 font-medium italic text-sm">No transactions yet.</div>
-                      ) : (
-                        [...selectedStudent.payments].reverse().map(payment => (
-                          <div key={payment.id} className="p-3 sm:p-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors gap-3">
-                            <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-                              <div className="w-9 h-9 sm:w-10 sm:h-10 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 shadow-sm shrink-0">
-                                <DollarSign size={16} />
-                              </div>
-                              <div className="min-w-0">
-                                <p className="text-base sm:text-lg font-black tracking-tight leading-none mb-1 truncate dark:text-gray-100">৳{payment.amountPaid}</p>
-                                <p className="text-[8px] sm:text-[9px] text-gray-500 dark:text-gray-400 font-black uppercase tracking-widest truncate">
-                                  {format(parseISO(payment.month), 'MMM yyyy')} • {format(parseISO(payment.date), 'PP')}
-                                </p>
-                              </div>
-                            </div>
-                            {payment.note && (
-                              <span className="hidden sm:inline-block text-[8px] sm:text-[9px] font-black bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 px-2 py-1 rounded-lg uppercase tracking-widest truncate max-w-[100px]">
-                                {payment.note}
-                              </span>
-                            )}
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </Card>
-                </div>
-              </div>
-            </motion.div>
-          )}
-
-          {activeTab === 'batches' && (
-            <motion.div 
-              key="batches"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="space-y-8"
-            >
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-2">
-                  <Layers size={22} className="text-indigo-600 dark:text-indigo-400" />
-                  <h2 className="text-[20px] sm:text-[23px] leading-[21px] font-black tracking-tight dark:text-gray-100">Batches</h2>
-                </div>
-                <button 
-                  onClick={() => setView('add-batch')}
-                  title="Create New Batch"
-                  className="p-2 rounded-xl bg-indigo-600 dark:bg-indigo-500 text-white hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all shadow-lg shadow-indigo-100 dark:shadow-none"
-                >
-                  <Plus size={18} />
-                </button>
-              </div>
-
-              {view === 'add-batch' ? (
-                <Card className="p-6 sm:p-8 border-none shadow-xl rounded-[2.5rem] dark:bg-gray-900 dark:border dark:border-gray-800">
-                  <div className="flex items-center gap-4 mb-8">
-                    <button onClick={() => setView('main')} className="w-10 h-10 bg-gray-50 dark:bg-gray-800 rounded-xl flex items-center justify-center text-gray-400 dark:text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 transition-colors">
-                      <ArrowLeft size={20} />
-                    </button>
-                    <h3 className="text-xl font-black tracking-tight dark:text-gray-100">Create New Batch</h3>
-                  </div>
-                  <form className="space-y-6" onSubmit={(e) => {
-                    e.preventDefault();
-                    if (isSubmitting) return;
-                    setIsSubmitting(true);
-
-                    const formData = new FormData(e.currentTarget);
-                    const name = formData.get('name') as string;
-                    const className = formData.get('className') as string;
-                    const monthlyFee = Number(formData.get('monthlyFee'));
-                    const salaryType = formData.get('salaryType') as SalaryType;
-                    const classDays = Array.from(formData.getAll('classDays')) as string[];
-
-                    if (name && className) {
-                      addBatch({ name, className, monthlyFee, salaryType, classDays });
-                      setView('main');
-                    }
-                    setIsSubmitting(false);
-                  }}>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest ml-1">Batch Name</label>
-                        <input name="name" required placeholder="e.g. Morning Batch" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl px-5 py-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all dark:text-gray-100" />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest ml-1">Class/Subject</label>
-                        <select name="className" required className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl px-5 py-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all appearance-none dark:text-gray-100">
-                          {classesToUse.map(c => <option key={c} value={c}>{c}</option>)}
-                        </select>
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest ml-1">Monthly Fee (৳)</label>
-                        <input name="monthlyFee" type="number" required placeholder="e.g. 2000" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl px-5 py-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all dark:text-gray-100" />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest ml-1">Salary Type</label>
-                        <select name="salaryType" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl px-5 py-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all appearance-none dark:text-gray-100">
-                          <option value="fixed">Fixed Monthly</option>
-                          <option value="free">Free/Scholarship</option>
-                          <option value="not-sure">Not Sure Yet</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div className="space-y-4">
-                      <label className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest ml-1">Class Days</label>
-                      <div className="flex flex-wrap gap-2">
-                        {DAYS_OF_WEEK.map(day => (
-                          <label key={day} className="cursor-pointer">
-                            <input type="checkbox" name="classDays" value={day} className="hidden peer" />
-                            <div className="px-4 py-2 rounded-xl bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-400 font-bold text-xs peer-checked:bg-indigo-600 dark:peer-checked:bg-indigo-500 peer-checked:text-white transition-all">
-                              {day}
-                            </div>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    <button 
-                      type="submit" 
-                      disabled={isSubmitting}
-                      className="w-full bg-indigo-600 dark:bg-indigo-500 text-white py-4 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all shadow-lg shadow-indigo-100 dark:shadow-none disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isSubmitting ? 'Creating...' : 'Create Batch'}
-                    </button>
-                  </form>
-                </Card>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {batches.length === 0 ? (
-                    <Card className="col-span-full p-12 flex flex-col items-center justify-center text-center border-dashed border-2 border-gray-100 bg-gray-50/30 dark:border-gray-800 dark:bg-gray-800/30 rounded-[2.5rem]">
-                      <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center text-gray-400 mb-4 shadow-sm dark:bg-gray-700 dark:text-gray-500">
-                        <Layers size={32} />
-                      </div>
-                      <h3 className="text-xl font-black tracking-tight text-gray-700 dark:text-gray-300">No Batches Yet</h3>
-                      <p className="text-gray-700 text-sm font-bold mt-2 dark:text-gray-400">Create a batch to group your students together.</p>
-                    </Card>
-                  ) : (
-                    batches.map(batch => {
-                      const batchStudents = students.filter(s => s.batchId === batch.id);
-                      return (
-                        <Card key={batch.id} className="p-6 sm:p-8 border-none shadow-sm hover:shadow-md transition-all rounded-[2.5rem] group dark:bg-gray-900 dark:border dark:border-gray-800">
-                          <div className="flex justify-between items-start mb-6">
-                            <div>
-                              <h3 className="text-xl font-black tracking-tight group-hover:text-indigo-600 transition-colors dark:group-hover:text-indigo-400 dark:text-gray-100">{batch.name}</h3>
-                              <p className="text-[10px] font-black text-gray-700 uppercase tracking-widest mt-1 dark:text-gray-400">{batch.className} • {batch.classDays.join(', ')}</p>
-                            </div>
-                            <button 
-                              onClick={() => deleteBatch(batch.id)}
-                              className="w-8 h-8 bg-rose-50 text-rose-600 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:hover:bg-rose-500/20"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                          
-                          <div className="space-y-4">
-                            <div className="flex items-center justify-between text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest">
-                              <span>Students ({batchStudents.length})</span>
-                              <span className="dark:text-gray-300">৳{batch.monthlyFee}/mo</span>
-                            </div>
-                            
-                            <div className="flex flex-wrap gap-2">
-                              {batchStudents.map(s => (
-                                <div key={s.id} className="px-3 py-1.5 bg-gray-50 dark:bg-gray-800 rounded-lg text-[10px] font-bold text-gray-600 dark:text-gray-400">
-                                  {s.name}
-                                </div>
-                              ))}
-                              <button 
-                                onClick={() => {
-                                  setSelectedStudentId(null);
-                                  setSelectedBatchId(batch.id);
-                                  setActiveTab('students');
-                                  setView('add');
-                                }}
-                                title="Add Student to Batch"
-                                className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors dark:bg-indigo-500/10 dark:text-indigo-400 dark:hover:bg-indigo-500/20"
-                              >
-                                <UserPlus size={14} />
-                              </button>
-                            </div>
-                          </div>
-                        </Card>
-                      );
-                    })
-                  )}
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {activeTab === 'reports' && (
-            <motion.div 
-              key="reports"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="space-y-8"
-            >
-              <div className="flex items-center justify-between gap-4">
-                <button onClick={() => setActiveTab('dashboard')} className="flex items-center gap-2 text-gray-700 hover:text-gray-900 transition-colors font-bold text-[10px] sm:text-sm uppercase tracking-widest shrink-0 dark:text-gray-400 dark:hover:text-gray-200">
-                  <ArrowLeft size={16} />
-                  <span className="hidden sm:inline">Dashboard</span>
-                </button>
-                <div className="flex items-center gap-3">
-                  <BarChart3 size={24} className="text-indigo-600 dark:text-indigo-400" />
-                  <h2 className="text-[20px] sm:text-[23px] leading-[21px] font-black tracking-tight text-right sm:text-left truncate max-w-[150px] sm:max-w-none dark:text-gray-100">Financial Report</h2>
-                </div>
-              </div>
-
-              <div className="space-y-8">
-                {/* 4 Stats Cards at the top */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
-                  {[
-                    { label: 'Lifetime Expected', value: `৳${students.reduce((acc, s) => acc + getStudentFinancials(s).totalExpected, 0).toLocaleString()}`, color: 'text-indigo-600', icon: <TrendingUp className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> },
-                    { label: 'Total Collected', value: `৳${students.reduce((acc, s) => acc + s.payments.reduce((pAcc, p) => pAcc + p.amountPaid, 0), 0).toLocaleString()}`, color: 'text-emerald-600', icon: <DollarSign className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> },
-                    { label: 'Current Dues', value: `৳${students.reduce((acc, s) => acc + getStudentFinancials(s).dues, 0).toLocaleString()}`, color: 'text-rose-600', icon: <AlertCircle className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> },
-                    { label: 'Total Advance', value: `৳${students.reduce((acc, s) => acc + getStudentFinancials(s).advance, 0).toLocaleString()}`, color: 'text-amber-600', icon: <Wallet className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> }
-                  ].map((stat, i) => (
-                    <Card key={i} className="p-2.5 sm:p-4 border-none shadow-sm hover:shadow-md transition-all rounded-[1.25rem] sm:rounded-[1.5rem] flex flex-col justify-between min-h-[80px] sm:min-h-[90px]">
-                      <div className="flex items-center justify-between mb-1">
-                        <p className="text-[8px] sm:text-[9px] text-gray-700 font-black uppercase tracking-[0.15em] sm:tracking-[0.2em] dark:text-gray-400">{stat.label}</p>
-                        <div className={cn("p-1 sm:p-1.5 rounded-lg", stat.color.replace('text-', 'bg-').replace('-600', '-50') + " " + stat.color + " dark:bg-gray-800")}>
-                          {stat.icon}
-                        </div>
-                      </div>
-                      <p className={cn("text-base sm:text-xl font-black tracking-tighter truncate", stat.color)}>{stat.value}</p>
-                    </Card>
-                  ))}
-                </div>
-
-                <div className="bg-white dark:bg-gray-900 rounded-[2rem] overflow-hidden max-w-full border border-gray-100 dark:border-gray-800">
-                  <div className="p-5 sm:p-6 border-b border-gray-50 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-800/30 flex items-center gap-2">
-                    <FileText size={18} className="text-indigo-600 dark:text-indigo-400" />
-                    <h3 className="font-black tracking-tight text-base sm:text-lg dark:text-gray-100">Student Ledger</h3>
-                  </div>
-                  {/* Mobile: card list */}
-                  <div className="sm:hidden divide-y divide-gray-50 dark:divide-gray-800">
-                    {students.map(s => {
-                      const fin = getStudentFinancials(s);
-                      return (
-                        <div
-                          key={s.id}
-                          className="flex items-center justify-between p-4 active:bg-gray-50 dark:active:bg-gray-800 transition-colors"
-                          onClick={() => { setSelectedStudentId(s.id); setActiveTab('students'); setView('details'); }}
-                        >
-                          <div className="min-w-0">
-                            <p className="font-black text-sm truncate dark:text-gray-100">{s.name}</p>
-                            <p className="text-[9px] text-gray-700 font-bold uppercase tracking-widest dark:text-gray-400">{s.className}</p>
-                          </div>
-                          <div className="flex gap-3 shrink-0 ml-2">
-                            <div className="text-right">
-                              <p className="text-[9px] text-gray-600 font-bold uppercase flex items-center justify-end gap-1 dark:text-gray-500">
-                                <Check size={8} />
-                                Paid
-                              </p>
-                              <p className="font-black text-sm text-emerald-600 dark:text-emerald-400">৳{fin.totalPaid.toLocaleString()}</p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-[9px] text-gray-600 font-bold uppercase flex items-center justify-end gap-1 dark:text-gray-500">
-                                <AlertCircle size={8} />
-                                Dues
-                              </p>
-                              <p className="font-black text-sm text-rose-600 dark:text-rose-400">৳{fin.dues.toLocaleString()}</p>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {/* Desktop: table */}
-                  <div className="hidden sm:block overflow-x-auto w-full no-scrollbar">
-                    <table className="w-full text-left">
-                      <thead>
-                        <tr className="text-[9px] text-gray-700 uppercase font-black tracking-[0.2em] border-b border-gray-50 dark:border-gray-800 dark:text-gray-400">
-                          <th className="px-6 py-4 flex items-center gap-2">
-                            <User size={12} />
-                            Student
-                          </th>
-                          <th className="px-6 py-4 text-right">
-                            <div className="flex items-center justify-end gap-2">
-                              <Check size={12} />
-                              Paid
-                            </div>
-                          </th>
-                          <th className="px-6 py-4 text-right">
-                            <div className="flex items-center justify-end gap-2">
-                              <AlertCircle size={12} />
-                              Dues
-                            </div>
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
-                        {students.map(s => {
-                          const fin = getStudentFinancials(s);
-                          return (
-                            <tr
-                              key={s.id}
-                              className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors cursor-pointer group"
-                              onClick={() => { setSelectedStudentId(s.id); setActiveTab('students'); setView('details'); }}
-                            >
-                              <td className="px-6 py-4">
-                                <p className="font-black text-sm group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors dark:text-gray-100">{s.name}</p>
-                                <p className="text-[9px] text-gray-500 font-bold uppercase tracking-widest dark:text-gray-400">{s.className}</p>
-                              </td>
-                              <td className="px-6 py-4 font-black text-emerald-600 dark:text-emerald-400 text-sm whitespace-nowrap text-right">৳{fin.totalPaid.toLocaleString()}</td>
-                              <td className="px-6 py-4 font-black text-rose-600 dark:text-rose-400 text-sm whitespace-nowrap text-right">৳{fin.dues.toLocaleString()}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-8">
-                  <Card className="p-8 border-none shadow-sm rounded-[2.5rem] dark:bg-gray-900 dark:border dark:border-gray-800">
-                    <div className="flex items-center gap-2 mb-8">
-                      <Layers size={14} className="text-gray-400 dark:text-gray-500" />
-                      <h3 className="font-black text-[10px] text-gray-500 uppercase tracking-[0.2em] dark:text-gray-400">Batch Distribution (Active)</h3>
-                    </div>
-                    <div className="space-y-6">
-                      {Array.from(new Set(students.filter(s => s.status === 'active').map(s => s.className))).map(className => {
-                        const activeStudents = students.filter(s => s.status === 'active');
-                        const count = activeStudents.filter(s => s.className === className).length;
-                        const percentage = activeStudents.length > 0 ? (count / activeStudents.length) * 100 : 0;
-                        return (
-                          <div key={className} className="space-y-2">
-                            <div className="flex justify-between text-xs font-black uppercase tracking-widest">
-                              <span className="text-gray-900 dark:text-gray-100">{className}</span>
-                              <span className="text-gray-500 dark:text-gray-400">{count}</span>
-                            </div>
-                            <div className="w-full bg-gray-100 dark:bg-gray-800 h-3 rounded-full overflow-hidden">
-                              <motion.div 
-                                initial={{ width: 0 }}
-                                animate={{ width: `${percentage}%` }}
-                                className="bg-indigo-600 dark:bg-indigo-500 h-full rounded-full" 
-                              />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </Card>
-                </div>
-              </div>
-            </motion.div>
-          )}
-          {activeTab === 'settings' && (
-            <motion.div 
-              key="settings"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="space-y-8"
-            >
-              <div className="flex items-center justify-between">
-                <button onClick={() => setActiveTab('dashboard')} className="flex items-center gap-2 text-gray-400 dark:text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 transition-colors font-bold text-sm uppercase tracking-widest">
-                  <ArrowLeft size={16} />
-                  <span className="hidden sm:inline">Dashboard</span>
-                </button>
-                <div className="flex items-center gap-3">
-                  <Settings size={20} className="text-indigo-600 dark:text-indigo-400" />
-                  <h2 className="text-xl sm:text-3xl font-black tracking-tight dark:text-gray-100">Profile Settings</h2>
-                </div>
-              </div>
-
-                  <Card className="p-6 sm:p-10 border-none shadow-sm rounded-[2.5rem] bg-white dark:bg-gray-900 dark:border dark:border-gray-800">
-                    <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6 mb-10 text-center sm:text-left">
-                      <div className="w-20 h-20 sm:w-24 sm:h-24 bg-indigo-600 dark:bg-indigo-500 rounded-[2rem] flex items-center justify-center text-white text-2xl sm:text-3xl font-black shadow-xl shadow-indigo-100 dark:shadow-none shrink-0">
-                        {userProfile?.name.charAt(0)}
-                      </div>
-                      <div>
-                        <h3 className="text-xl sm:text-2xl font-black tracking-tight dark:text-gray-100">{userProfile?.name}</h3>
-                        <p className="text-gray-500 dark:text-gray-400 font-medium text-sm sm:text-base">{userProfile?.title}</p>
-                      </div>
-                    </div>
-
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2 ml-1">
-                    <Layers size={14} className="text-gray-400 dark:text-gray-500" />
-                    <h3 className="text-xs font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest">Batch Management</h3>
-                  </div>
-                  <Card className="p-4 sm:p-6 border-none shadow-sm bg-gray-50/50 dark:bg-gray-800/50">
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      {classesToUse.map((cls) => (
-                        <div key={cls} className="bg-white dark:bg-gray-900 px-3 py-1.5 rounded-xl border border-gray-100 dark:border-gray-800 flex items-center gap-2 group">
-                          <span className="text-xs font-bold dark:text-gray-100">{cls}</span>
-                          <button 
-                            onClick={() => handleSaveClasses(classesToUse.filter(c => c !== cls))}
-                            className="text-gray-400 dark:text-gray-500 hover:text-rose-500 dark:hover:text-rose-400 transition-colors"
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                    <form className="flex flex-col sm:flex-row gap-2" onSubmit={(e) => {
-                      e.preventDefault();
-                      const input = e.currentTarget.elements.namedItem('newClass') as HTMLInputElement;
-                      if (input.value.trim()) {
-                        handleSaveClasses([...classesToUse, input.value.trim()]);
-                        input.value = '';
-                      }
-                    }}>
-                      <input 
-                        name="newClass"
-                        placeholder="Add new batch..."
-                        className="flex-1 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl px-4 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-500/10 min-w-0 dark:text-gray-100"
-                      />
-                      <button type="submit" className="bg-indigo-600 dark:bg-indigo-500 text-white px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all shrink-0">
-                        Add
-                      </button>
-                    </form>
-                  </Card>
-
-                  <Card className="p-6 border-none shadow-sm rounded-[2.5rem] bg-white dark:bg-gray-900 dark:border dark:border-gray-800 mb-4">
-                    <div className="flex items-center justify-between mb-6">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-amber-50 dark:bg-amber-500/10 rounded-xl flex items-center justify-center text-amber-600 dark:text-amber-400">
-                          <Bell size={20} />
-                        </div>
-                        <div>
-                          <h3 className="text-sm font-black uppercase tracking-widest text-gray-700 dark:text-gray-300">Notifications</h3>
-                          <p className="text-[9px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest">
-                            {notificationsEnabled ? 'Enabled' : 'Disabled'}
-                          </p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={async () => {
-                          if (!notificationsEnabled) {
-                            const granted = await requestNotificationPermission();
-                            if (granted) {
-                              setNotificationsEnabled(true);
-                              setNotificationPermission(true);
-                              localStorage.setItem('tution_notifications_enabled', 'true');
-                              await schedulePaymentReminders(students);
-                            }
-                          } else {
-                            setNotificationsEnabled(false);
-                            localStorage.setItem('tution_notifications_enabled', 'false');
-                          }
-                        }}
-                        className={cn(
-                          "w-14 h-8 rounded-full transition-all relative",
-                          notificationsEnabled ? "bg-indigo-600" : "bg-gray-300 dark:bg-gray-700"
-                        )}
-                      >
-                        <div className={cn(
-                          "w-6 h-6 bg-white rounded-full absolute top-1 transition-all",
-                          notificationsEnabled ? "left-7" : "left-1"
-                        )} />
-                      </button>
-                    </div>
-                    
-                    <p className="text-[9px] font-bold text-gray-500 dark:text-gray-400 mb-4 leading-relaxed">
-                      Get reminders for pending payments and daily summaries.
-                    </p>
-                    
-                    <button
-                      onClick={sendTestNotification}
-                      disabled={!notificationsEnabled}
-                      className="w-full flex items-center justify-center gap-2 p-3 bg-gray-50 dark:bg-gray-800 rounded-xl text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Bell size={16} />
-                      <span className="font-black text-xs uppercase tracking-widest">Send Test Notification</span>
-                    </button>
-                  </Card>
-
-                  <Card className="p-6 border-none shadow-sm rounded-[2.5rem] bg-white dark:bg-gray-900 dark:border dark:border-gray-800 mb-4">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-gray-700 dark:text-gray-400 mb-6">Data Backup & Restore</h3>
-                    
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <button 
-                        onClick={handleExportData}
-                        className="flex items-center gap-4 p-4 bg-indigo-50 dark:bg-indigo-500/10 rounded-2xl text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-all group"
-                      >
-                        <div className="w-10 h-10 bg-white dark:bg-gray-800 rounded-xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-                          <Download size={20} />
-                        </div>
-                        <div className="text-left">
-                          <p className="font-black text-xs uppercase tracking-widest">Backup Data</p>
-                          <p className="text-[8px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">Download to file</p>
-                        </div>
-                      </button>
-
-                      <label className="flex items-center gap-4 p-4 bg-emerald-50 dark:bg-emerald-500/10 rounded-2xl text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/20 transition-all group cursor-pointer">
-                        <input 
-                          type="file" 
-                          accept=".json" 
-                          onChange={handleImportData} 
-                          className="hidden" 
-                        />
-                        <div className="w-10 h-10 bg-white dark:bg-gray-800 rounded-xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-                          <Upload size={20} />
-                        </div>
-                        <div className="text-left">
-                          <p className="font-black text-xs uppercase tracking-widest">Restore Data</p>
-                          <p className="text-[8px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest">Upload from file</p>
-                        </div>
-                      </label>
-                    </div>
-                    
-                    <p className="mt-4 text-[9px] font-bold text-gray-700 dark:text-gray-400 uppercase tracking-widest leading-relaxed">
-                      Tip: Download a backup regularly to keep your data safe. You can restore it on any device.
-                    </p>
-                  </Card>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                    <button 
-                      onClick={() => setShowAppInfo(true)}
-                      className="flex items-center gap-4 p-4 bg-blue-50 dark:bg-blue-500/10 rounded-2xl text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition-all group"
-                    >
-                      <div className="w-10 h-10 bg-white dark:bg-gray-800 rounded-xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-                        <Info size={20} />
-                      </div>
-                      <div className="text-left">
-                        <p className="font-black text-xs uppercase tracking-widest">App Info</p>
-                        <p className="text-[8px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest">Version 1.0.0</p>
-                      </div>
-                    </button>
-
-                    <button 
-                      onClick={() => setShowDevInfo(true)}
-                      className="flex items-center gap-4 p-4 bg-purple-50 dark:bg-purple-500/10 rounded-2xl text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-500/20 transition-all group"
-                    >
-                      <div className="w-10 h-10 bg-white dark:bg-gray-800 rounded-xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-                        <User size={20} />
-                      </div>
-                      <div className="text-left">
-                        <p className="font-black text-xs uppercase tracking-widest">Developer</p>
-                        <p className="text-[8px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-widest">Contact Info</p>
-                      </div>
-                    </button>
-                  </div>
-
-                  <button 
-                    onClick={() => setShowShareModal(true)}
-                    className="w-full flex items-center justify-between p-6 bg-indigo-600 dark:bg-indigo-500 rounded-3xl text-white hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all group mb-4 shadow-lg shadow-indigo-100 dark:shadow-none"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm group-hover:scale-110 transition-transform">
-                        <Share2 size={20} />
-                      </div>
-                      <span className="font-black text-sm uppercase tracking-widest">Share App</span>
-                    </div>
-                    <ChevronRight size={20} />
-                  </button>
-
-                  <button 
-                    onClick={() => setShowResetWarning(true)}
-                    className="w-full flex items-center justify-between p-6 bg-rose-50 dark:bg-rose-500/10 rounded-3xl text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-500/20 transition-all group"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 bg-white dark:bg-gray-800 rounded-xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-                        <Trash2 size={20} />
-                      </div>
-                      <span className="font-black text-sm uppercase tracking-widest">Reset App Data</span>
-                    </div>
-                    <ChevronRight size={20} />
+              {/* Danger */}
+              <div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 px-1">Danger Zone</p>
+                <div className="settings-section">
+                  <button onClick={() => setShowResetWarning(true)} className="settings-row w-full">
+                    <div className="flex items-center gap-3"><Trash2 size={18} className="text-rose-500" /><div><p className="font-bold text-sm text-rose-500">Reset All Data</p><p className="text-[10px] text-gray-400 font-medium">Permanently delete everything</p></div></div>
+                    <ChevronRight size={16} className="text-rose-300" />
                   </button>
                 </div>
-              </Card>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
       </main>
 
-      {/* Bottom Navigation for Mobile */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-3xl border-t border-gray-100 md:hidden px-4 pt-3 bottom-nav-safe flex justify-between items-center z-50 shadow-[0_-10px_40px_rgba(0,0,0,0.03)] dark:bg-[#0F1115]/90 dark:border-gray-800">
+      {/* ─── Bottom Nav ─── */}
+      <nav className={cn("fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-3xl border-t border-gray-100/80 md:hidden px-2 pt-2 bottom-nav-safe flex justify-between items-center z-50 dark:bg-[#0F1115]/90 dark:border-gray-800/80 transition-all duration-200", keyboardOpen && "hidden")}>
         {[
           { id: 'dashboard', icon: <LayoutDashboard size={20} />, label: 'Home' },
           { id: 'students', icon: <Users size={20} />, label: 'Students' },
-          { id: 'add', icon: <Plus size={24} />, label: 'Add', isSpecial: true },
+          { id: 'add', icon: <Plus size={22} />, label: 'Add', isSpecial: true },
           { id: 'reports', icon: <FileText size={20} />, label: 'Reports' },
           { id: 'settings', icon: <User size={20} />, label: 'Profile' },
         ].map((item) => (
-          <button 
-            key={item.id}
-            onClick={() => {
-              if (item.id === 'add') {
-                setShowAddMenu(true);
-              } else {
-                setActiveTab(item.id as any);
-                setView('main');
-              }
-            }} 
-            className={cn(
-              "flex flex-col items-center gap-1 transition-all", 
-              item.isSpecial ? "bg-indigo-600 dark:bg-indigo-500 text-white w-12 h-12 rounded-2xl justify-center -mt-8 shadow-xl shadow-indigo-200 dark:shadow-none" : (activeTab === item.id ? "text-indigo-600 dark:text-indigo-400 scale-110" : "text-gray-700 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100")
-            )}
-          >
+          <button key={item.id} onClick={() => { if (item.id === 'add') { setShowAddMenu(true); } else { setActiveTab(item.id as any); setView('main'); } }}
+            className={cn("flex flex-col items-center gap-0.5 px-3 py-1 transition-all rounded-xl",
+              item.isSpecial ? "bg-indigo-600 text-white w-12 h-12 rounded-2xl justify-center -mt-6 shadow-xl shadow-indigo-300/50 dark:shadow-none" : (activeTab === item.id && !item.isSpecial ? "text-indigo-600 dark:text-indigo-400" : "text-gray-400 dark:text-gray-500"))}>
             {item.icon}
-            {!item.isSpecial && <span className="text-[7px] font-black uppercase tracking-widest">{item.label}</span>}
+            {!item.isSpecial && <span className="text-[9px] font-black uppercase tracking-widest">{item.label}</span>}
           </button>
         ))}
       </nav>
 
-      {/* Add Menu Overlay */}
+      {/* ─── Add Menu Overlay ─── */}
       <AnimatePresence>
         {showAddMenu && (
           <>
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowAddMenu(false)}
-              className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[60]"
-            />
-            <motion.div 
-              initial={{ opacity: 0, y: 100 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 100 }}
-              className="fixed bottom-24 left-4 right-4 md:bottom-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:w-[400px] bg-white rounded-[2.5rem] p-6 z-[70] shadow-2xl border border-gray-100"
-            >
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-sm font-black uppercase tracking-widest text-gray-700">Quick Actions</h3>
-                <button onClick={() => setShowAddMenu(false)} className="text-gray-700 hover:text-gray-900">
-                  <Plus size={20} className="rotate-45" />
-                </button>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAddMenu(false)} className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[60]" />
+            <motion.div initial={{ opacity: 0, y: 80 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 80 }}
+              className="fixed bottom-24 left-4 right-4 bg-white dark:bg-[#1A1D23] rounded-[2rem] p-5 z-[70] shadow-2xl border border-gray-100 dark:border-gray-800">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-black uppercase tracking-widest text-gray-500 dark:text-gray-400">Quick Add</h3>
+                <button onClick={() => setShowAddMenu(false)}><X size={18} className="text-gray-400" /></button>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <button 
-                  onClick={() => {
-                    setSelectedStudentId(null);
-                    setSelectedBatchId(null);
-                    setActiveTab('students');
-                    setView('add');
-                    setShowAddMenu(false);
-                  }}
-                  className="flex flex-col items-center gap-3 p-6 bg-indigo-50 rounded-3xl text-indigo-600 hover:bg-indigo-100 transition-all group"
-                >
-                  <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-                    <UserPlus size={24} />
-                  </div>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => { setSelectedStudentId(null); setSelectedBatchId(null); setActiveTab('students'); setView('add'); setShowAddMenu(false); }}
+                  className="flex flex-col items-center gap-2.5 p-5 bg-indigo-50 dark:bg-indigo-500/10 rounded-2xl text-indigo-600 dark:text-indigo-400 active:scale-95 transition-all">
+                  <div className="w-12 h-12 bg-white dark:bg-gray-800 rounded-2xl flex items-center justify-center shadow-sm"><UserPlus size={22} /></div>
                   <span className="font-black text-[10px] uppercase tracking-widest">New Student</span>
                 </button>
-                <button 
-                  onClick={() => {
-                    setActiveTab('batches');
-                    setView('add-batch');
-                    setShowAddMenu(false);
-                  }}
-                  className="flex flex-col items-center gap-3 p-6 bg-emerald-50 rounded-3xl text-emerald-600 hover:bg-emerald-100 transition-all group"
-                >
-                  <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-                    <Layers size={24} />
-                  </div>
+                <button onClick={() => { setActiveTab('batches'); setView('add-batch'); setShowAddMenu(false); }}
+                  className="flex flex-col items-center gap-2.5 p-5 bg-emerald-50 dark:bg-emerald-500/10 rounded-2xl text-emerald-600 dark:text-emerald-400 active:scale-95 transition-all">
+                  <div className="w-12 h-12 bg-white dark:bg-gray-800 rounded-2xl flex items-center justify-center shadow-sm"><Layers size={22} /></div>
                   <span className="font-black text-[10px] uppercase tracking-widest">New Batch</span>
                 </button>
               </div>
@@ -1832,242 +1236,201 @@ export default function App() {
           </>
         )}
       </AnimatePresence>
-      {/* Modals */}
+
+      {/* ─── Transaction Detail Modal ─── */}
       <AnimatePresence>
-        {/* Reset Warning Modal */}
+        {showTransactionDetail && selectedPayment && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowTransactionDetail(false)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]" />
+            <motion.div initial={{ opacity: 0, y: 60 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 60 }}
+              className="fixed bottom-0 left-0 right-0 sm:bottom-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:max-w-sm w-full bg-white dark:bg-gray-900 rounded-t-[2.5rem] sm:rounded-[2.5rem] p-6 z-[110] shadow-2xl border-t sm:border border-gray-100 dark:border-gray-800">
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="font-black text-lg dark:text-gray-100">Transaction Details</h3>
+                <button onClick={() => setShowTransactionDetail(false)} className="p-2 bg-gray-50 dark:bg-gray-800 rounded-xl"><X size={16} className="text-gray-400" /></button>
+              </div>
+              <div className="space-y-3 mb-5">
+                {[
+                  { label: 'Amount', value: `৳${selectedPayment.payment.amountPaid.toLocaleString()}` },
+                  { label: 'For Month', value: format(parseISO(selectedPayment.payment.month), 'MMMM yyyy') },
+                  { label: 'Date Paid', value: format(parseISO(selectedPayment.payment.date), 'dd MMM yyyy, hh:mm a') },
+                  ...(selectedPayment.payment.note ? [{ label: 'Note', value: selectedPayment.payment.note }] : [])
+                ].map((item, i) => (
+                  <div key={i} className="flex items-center justify-between bg-gray-50 dark:bg-gray-800 px-4 py-3 rounded-xl">
+                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{item.label}</span>
+                    <span className="font-bold text-sm dark:text-gray-100">{item.value}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={handleEditPayment} className="py-3.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2"><Edit3 size={14} />Edit</button>
+                <button onClick={() => { setShowTransactionDetail(false); setShowDeletePayment(true); }} className="py-3.5 bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2"><Trash2 size={14} />Delete</button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* ─── Edit Payment Modal ─── */}
+      <AnimatePresence>
+        {showEditPayment && selectedPayment && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowEditPayment(false)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]" />
+            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-sm bg-white dark:bg-gray-900 rounded-[2rem] p-6 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800">
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="font-black text-lg dark:text-gray-100">Edit Transaction</h3>
+                <button onClick={() => setShowEditPayment(false)} className="p-2 bg-gray-50 dark:bg-gray-800 rounded-xl"><X size={16} className="text-gray-400" /></button>
+              </div>
+              <div className="space-y-3 mb-5">
+                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Amount (৳)</label><input type="number" value={editPaymentForm.amountPaid} onChange={e => setEditPaymentForm(p => ({ ...p, amountPaid: e.target.value }))} className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl p-3.5 outline-none font-bold dark:text-gray-100" /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Note</label><input value={editPaymentForm.note} onChange={e => setEditPaymentForm(p => ({ ...p, note: e.target.value }))} className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl p-3.5 outline-none font-bold dark:text-gray-100" placeholder="Optional" /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setShowEditPayment(false)} className="py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
+                <button onClick={handleSaveEditPayment} className="py-3.5 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest">Save</button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* ─── Delete Payment Confirm ─── */}
+      <AnimatePresence>
+        {showDeletePayment && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowDeletePayment(false)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]" />
+            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-sm bg-white dark:bg-gray-900 rounded-[2rem] p-7 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800 text-center">
+              <div className="w-14 h-14 bg-rose-50 dark:bg-rose-900/20 text-rose-600 rounded-2xl flex items-center justify-center mb-4 mx-auto"><Trash2 size={26} /></div>
+              <h3 className="text-xl font-black mb-2 dark:text-gray-100">Delete Transaction?</h3>
+              <p className="text-gray-400 text-sm font-medium mb-6">This will permanently remove ৳{selectedPayment?.payment.amountPaid.toLocaleString()} payment. This cannot be undone.</p>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setShowDeletePayment(false)} className="py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
+                <button onClick={handleDeletePaymentConfirm} className="py-3.5 bg-rose-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest">Delete</button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* ─── Backup Confirm Modal ─── */}
+      <AnimatePresence>
+        {showBackupConfirm && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowBackupConfirm(false)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]" />
+            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-sm bg-white dark:bg-gray-900 rounded-[2rem] p-7 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800 text-center">
+              <div className="w-14 h-14 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 rounded-2xl flex items-center justify-center mb-4 mx-auto"><CheckCircle2 size={28} /></div>
+              <h3 className="text-xl font-black mb-1 dark:text-gray-100">Backup Saved!</h3>
+              <p className="text-gray-400 text-sm font-medium mb-2">Your data has been downloaded.</p>
+              <p className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-3 py-2 rounded-xl mb-6 break-all">{backupFilename}</p>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={handleShareBackup} className="py-3.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2"><Share2 size={14} />Share</button>
+                <button onClick={() => setShowBackupConfirm(false)} className="py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Close</button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* ─── Reset Warning ─── */}
+      <AnimatePresence>
         {showResetWarning && (
           <>
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowResetWarning(false)}
-              className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]"
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-[400px] bg-white dark:bg-gray-900 rounded-[2.5rem] p-8 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800 text-center"
-            >
-              <div className="w-20 h-20 bg-rose-50 dark:bg-rose-500/10 rounded-3xl flex items-center justify-center text-rose-600 dark:text-rose-400 mx-auto mb-6">
-                <AlertCircle size={40} />
-              </div>
-              <h3 className="text-xl font-black tracking-tight mb-2 dark:text-gray-100">Reset All Data?</h3>
-              <p className="text-gray-700 dark:text-gray-400 font-bold text-sm mb-8 leading-relaxed">
-                This action will permanently delete all students, batches, and payment history. This cannot be undone.
-              </p>
-              <div className="flex flex-col gap-3">
-                <button 
-                  onClick={() => {
-                    localStorage.clear();
-                    window.location.reload();
-                  }}
-                  className="w-full bg-rose-600 dark:bg-rose-500 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-rose-700 dark:hover:bg-rose-600 transition-all shadow-lg shadow-rose-100 dark:shadow-none"
-                >
-                  Yes, Reset Everything
-                </button>
-                <button 
-                  onClick={() => setShowResetWarning(false)}
-                  className="w-full bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-400 py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
-                >
-                  Cancel
-                </button>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowResetWarning(false)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]" />
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-sm bg-white dark:bg-gray-900 rounded-[2rem] p-7 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800 text-center">
+              <div className="w-16 h-16 bg-rose-50 dark:bg-rose-500/10 rounded-3xl flex items-center justify-center text-rose-600 dark:text-rose-400 mx-auto mb-4"><AlertCircle size={32} /></div>
+              <h3 className="text-xl font-black mb-2 dark:text-gray-100">Reset All Data?</h3>
+              <p className="text-gray-400 font-medium text-sm mb-7 leading-relaxed">This will permanently delete all students, batches, and payment history. Cannot be undone.</p>
+              <div className="space-y-2">
+                <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="w-full bg-rose-600 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-rose-700 transition-all">Yes, Reset Everything</button>
+                <button onClick={() => setShowResetWarning(false)} className="w-full bg-gray-50 dark:bg-gray-800 text-gray-400 py-4 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
               </div>
             </motion.div>
           </>
         )}
+      </AnimatePresence>
 
-        {/* Share Modal */}
+      {/* ─── Share Modal ─── */}
+      <AnimatePresence>
         {showShareModal && (
           <>
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowShareModal(false)}
-              className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]"
-            />
-            <motion.div 
-              initial={{ opacity: 0, y: 100 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 100 }}
-              className="fixed bottom-0 left-0 right-0 sm:bottom-1/2 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:translate-y-1/2 w-full sm:max-w-[450px] bg-white dark:bg-gray-900 rounded-t-[3rem] sm:rounded-[3rem] p-8 z-[110] shadow-2xl border-t sm:border border-gray-100 dark:border-gray-800"
-            >
-              <div className="flex items-center justify-between mb-8">
-                <h3 className="text-xl font-black tracking-tight dark:text-gray-100">Share App</h3>
-                <button onClick={() => setShowShareModal(false)} className="w-10 h-10 bg-gray-50 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all">
-                  <Plus size={20} className="rotate-45" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowShareModal(false)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]" />
+            <motion.div initial={{ opacity: 0, y: 80 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 80 }}
+              className="fixed bottom-0 left-0 right-0 sm:bottom-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:max-w-sm w-full bg-white dark:bg-gray-900 rounded-t-[2.5rem] sm:rounded-[2.5rem] p-6 z-[110] shadow-2xl border-t sm:border border-gray-100 dark:border-gray-800">
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="font-black text-lg dark:text-gray-100">Share Tution Pro</h3>
+                <button onClick={() => setShowShareModal(false)} className="p-2 bg-gray-50 dark:bg-gray-800 rounded-xl"><X size={16} className="text-gray-400" /></button>
+              </div>
+              <div className="bg-gray-50 dark:bg-gray-800 rounded-2xl p-3.5 flex items-center justify-between mb-5">
+                <span className="text-sm font-bold text-gray-600 dark:text-gray-300 truncate">tution.pro.bd</span>
+                <button onClick={handleCopyLink} className={cn("flex items-center gap-1.5 px-3 py-2 rounded-xl font-black text-xs uppercase tracking-widest transition-all shrink-0", copySuccess ? "bg-emerald-500 text-white" : "bg-indigo-600 text-white")}>
+                  {copySuccess ? <><Check size={12} />Copied</> : <><Copy size={12} />Copy</>}
                 </button>
               </div>
-
-              <div className="space-y-6">
-                <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700">
-                  <p className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-2">App Link</p>
-                  <div className="flex items-center justify-between gap-4">
-                    <span className="text-sm font-bold text-gray-900 dark:text-gray-100 truncate">tutiontracker.vercel.app</span>
-                    <button 
-                      onClick={handleCopyLink}
-                      className={cn(
-                        "flex items-center gap-2 px-4 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all shrink-0",
-                        copySuccess ? "bg-emerald-500 text-white" : "bg-indigo-600 dark:bg-indigo-500 text-white hover:bg-indigo-700 dark:hover:bg-indigo-600"
-                      )}
-                    >
-                      {copySuccess ? <Check size={14} /> : <Copy size={14} />}
-                      {copySuccess ? 'Copied' : 'Copy'}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4">
-                  <button 
-                    onClick={() => handleShare('whatsapp')}
-                    className="flex flex-col items-center gap-2 p-4 bg-emerald-50 dark:bg-emerald-500/10 rounded-2xl text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/20 transition-all group"
-                  >
-                    <div className="w-12 h-12 bg-white dark:bg-gray-800 rounded-xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-                      <MessageCircle size={24} />
-                    </div>
-                    <span className="text-[8px] font-black uppercase tracking-widest">WhatsApp</span>
+              <div className="grid grid-cols-3 gap-3">
+                {[{ id: 'whatsapp', label: 'WhatsApp', icon: <MessageCircle size={22} />, bg: 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
+                  { id: 'messenger', label: 'Messenger', icon: <Share2 size={22} />, bg: 'bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400' },
+                  { id: 'other', label: 'More', icon: <Globe size={22} />, bg: 'bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400' }
+                ].map(item => (
+                  <button key={item.id} onClick={() => handleShare(item.id as any)} className={cn("flex flex-col items-center gap-2 p-4 rounded-2xl active:scale-95 transition-all", item.bg)}>
+                    <div className="w-12 h-12 bg-white dark:bg-gray-700 rounded-xl flex items-center justify-center shadow-sm">{item.icon}</div>
+                    <span className="text-[9px] font-black uppercase tracking-widest">{item.label}</span>
                   </button>
-                  <button 
-                    onClick={() => handleShare('messenger')}
-                    className="flex flex-col items-center gap-2 p-4 bg-blue-50 dark:bg-blue-500/10 rounded-2xl text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition-all group"
-                  >
-                    <div className="w-12 h-12 bg-white dark:bg-gray-800 rounded-xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-                      <Share2 size={24} />
-                    </div>
-                    <span className="text-[8px] font-black uppercase tracking-widest">Messenger</span>
-                  </button>
-                  <button 
-                    onClick={() => handleShare('other')}
-                    className="flex flex-col items-center gap-2 p-4 bg-gray-50 dark:bg-gray-800 rounded-2xl text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all group"
-                  >
-                    <div className="w-12 h-12 bg-white dark:bg-gray-800 rounded-xl flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-                      <Globe size={24} />
-                    </div>
-                    <span className="text-[8px] font-black uppercase tracking-widest">More</span>
-                  </button>
-                </div>
+                ))}
               </div>
             </motion.div>
           </>
         )}
+      </AnimatePresence>
 
-        {/* App Info Modal */}
+      {/* ─── App Info Modal ─── */}
+      <AnimatePresence>
         {showAppInfo && (
           <>
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowAppInfo(false)}
-              className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]"
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-[450px] bg-white dark:bg-gray-900 rounded-[3rem] p-8 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800"
-            >
-              <div className="flex items-center justify-between mb-8">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-indigo-600 dark:bg-indigo-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-indigo-100 dark:shadow-none">
-                    <GraduationCap size={24} />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAppInfo(false)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]" />
+            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-sm bg-white dark:bg-gray-900 rounded-[2.5rem] p-7 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-indigo-200/50 dark:shadow-none overflow-hidden">
+                    <img src="/logo.png" alt="Tution Pro" className="w-full h-full object-contain p-1" onError={(e) => { (e.target as any).style.display='none'; }} />
+                    <GraduationCap size={22} />
                   </div>
-                  <div>
-                    <h3 className="text-xl font-black tracking-tight dark:text-gray-100">TuitionTracker</h3>
-                    <p className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">Version 1.0.0</p>
-                  </div>
+                  <div><h3 className="text-lg font-black dark:text-gray-100">Tution Pro</h3><p className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">Version 1.0.0</p></div>
                 </div>
-                <button onClick={() => setShowAppInfo(false)} className="w-10 h-10 bg-gray-50 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all">
-                  <Plus size={20} className="rotate-45" />
-                </button>
+                <button onClick={() => setShowAppInfo(false)} className="p-2 bg-gray-50 dark:bg-gray-800 rounded-xl"><X size={16} className="text-gray-400" /></button>
               </div>
-
-              <div className="space-y-6">
-                <p className="text-gray-700 dark:text-gray-400 font-bold text-sm leading-relaxed">
-                  TuitionTracker is a comprehensive management tool designed specifically for private tutors and coaching centers. 
-                  Keep track of your students, batches, and payments with ease.
-                </p>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-2xl">
-                    <p className="text-[8px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-1">Status</p>
-                    <p className="text-xs font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-widest">Stable Release</p>
-                  </div>
-                  <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-2xl">
-                    <p className="text-[8px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-1">Platform</p>
-                    <p className="text-xs font-black text-gray-900 dark:text-gray-100 uppercase tracking-widest">Web / Mobile</p>
-                  </div>
-                </div>
-                <div className="p-6 bg-indigo-50 dark:bg-indigo-500/10 rounded-[2rem] border border-indigo-100 dark:border-indigo-500/20">
-                  <h4 className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-3">Key Features</h4>
-                  <ul className="space-y-2">
-                    {[
-                      'Student Management',
-                      'Batch Scheduling',
-                      'Payment Tracking',
-                      'Financial Reports',
-                      'Offline Data Storage'
-                    ].map((feature, i) => (
-                      <li key={i} className="flex items-center gap-2 text-xs font-bold text-gray-700 dark:text-gray-400">
-                        <div className="w-1.5 h-1.5 bg-indigo-600 dark:bg-indigo-500 rounded-full" />
-                        {feature}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+              <p className="text-gray-500 dark:text-gray-400 text-sm font-medium leading-relaxed mb-5">A comprehensive tuition management app for private tutors. Track students, schedules, and payments with ease.</p>
+              <div className="grid grid-cols-2 gap-3 mb-5">
+                <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-xl"><p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Status</p><p className="text-xs font-black text-emerald-600 dark:text-emerald-400">Stable Release</p></div>
+                <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-xl"><p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Platform</p><p className="text-xs font-black dark:text-gray-100">Web / Mobile</p></div>
+              </div>
+              <div className="p-4 bg-indigo-50 dark:bg-indigo-500/10 rounded-2xl">
+                <p className="text-[9px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-2">Features</p>
+                <div className="space-y-1">{['Student Management', 'Batch Scheduling', 'Payment Tracking', 'Financial Reports', 'Offline Storage', 'Payment Reminders'].map((f, i) => (<p key={i} className="text-xs font-bold text-gray-600 dark:text-gray-400 flex items-center gap-2"><span className="w-1.5 h-1.5 bg-indigo-600 rounded-full shrink-0" />{f}</p>))}</div>
               </div>
             </motion.div>
           </>
         )}
+      </AnimatePresence>
 
-        {/* Dev Info Modal */}
+      {/* ─── Dev Info Modal ─── */}
+      <AnimatePresence>
         {showDevInfo && (
           <>
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowDevInfo(false)}
-              className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]"
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-[400px] bg-white dark:bg-gray-900 rounded-[3rem] p-8 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800 text-center"
-            >
-              <button onClick={() => setShowDevInfo(false)} className="absolute top-6 right-6 w-10 h-10 bg-gray-50 dark:bg-gray-800 rounded-full flex items-center justify-center text-gray-700 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all">
-                <Plus size={20} className="rotate-45" />
-              </button>
-              
-              <div className="w-24 h-24 bg-purple-600 dark:bg-purple-500 rounded-[2rem] flex items-center justify-center text-white text-3xl font-black mx-auto mb-6 shadow-xl shadow-purple-100 dark:shadow-none">
-                JD
-              </div>
-              
-              <h3 className="text-2xl font-black tracking-tight mb-1 dark:text-gray-100">Joy Krishna</h3>
-              <p className="text-purple-600 dark:text-purple-400 font-black text-[10px] uppercase tracking-widest mb-6">Lead Developer</p>
-              
-              <p className="text-gray-700 dark:text-gray-400 font-bold text-sm mb-8 leading-relaxed">
-                Passionate about building tools that solve real-world problems. 
-                Feel free to reach out for feedback or suggestions!
-              </p>
-
-              <div className="flex flex-col gap-3">
-                <a 
-                  href="mailto:joymkrishna@gmail.com"
-                  className="w-full flex items-center justify-center gap-3 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100 py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
-                >
-                  <FileText size={18} />
-                  Email Me
-                </a>
-                <a 
-                  href="#"
-                  className="w-full flex items-center justify-center gap-3 bg-indigo-600 dark:bg-indigo-500 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all shadow-lg shadow-indigo-100 dark:shadow-none"
-                >
-                  <Globe size={18} />
-                  Portfolio
-                </a>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowDevInfo(false)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]" />
+            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-sm bg-white dark:bg-gray-900 rounded-[2.5rem] p-7 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800 text-center">
+              <button onClick={() => setShowDevInfo(false)} className="absolute top-5 right-5 p-2 bg-gray-50 dark:bg-gray-800 rounded-xl"><X size={16} className="text-gray-400" /></button>
+              <div className="w-20 h-20 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-[1.5rem] flex items-center justify-center text-white text-2xl font-black mx-auto mb-4 shadow-xl shadow-purple-200/50 dark:shadow-none">JM</div>
+              <h3 className="text-xl font-black mb-0.5 dark:text-gray-100">Joy Krishna Malakar</h3>
+              <p className="text-purple-600 dark:text-purple-400 font-black text-[10px] uppercase tracking-widest mb-3">Lead Developer</p>
+              <p className="text-gray-400 text-sm font-medium mb-2 leading-relaxed">Currently studying Computer Science & Engineering at Sylhet Polytechnic Institute.</p>
+              <div className="flex flex-col gap-2.5 mt-5">
+                <a href="mailto:joymkrishna@gmail.com" className="flex items-center justify-center gap-2 bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest"><FileText size={16} />Email Me</a>
+                <a href="https://joymkrishna.pro.bd" target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 bg-indigo-600 text-white py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-indigo-100 dark:shadow-none"><Globe size={16} />Portfolio</a>
               </div>
             </motion.div>
           </>
