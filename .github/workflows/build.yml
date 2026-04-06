@@ -42,6 +42,10 @@ jobs:
           EOF
           
           npx cap add android || true
+          
+          # Generate App Icons and Splash Screens
+          npx @capacitor/assets generate --android --iconSource public/logo.png --splashSource public/logo.png
+          
           npx cap sync android
 
       - name: Build Android APK
