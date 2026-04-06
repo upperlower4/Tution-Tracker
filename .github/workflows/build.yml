@@ -43,8 +43,16 @@ jobs:
           
           npx cap add android || true
           
+          # Setup assets directory for @capacitor/assets
+          mkdir -p assets
+          cp public/logo.png assets/icon-only.png
+          cp public/logo.png assets/icon-foreground.png
+          cp public/logo.png assets/icon-background.png
+          cp public/logo.png assets/splash.png
+          cp public/logo.png assets/splash-dark.png
+          
           # Generate App Icons and Splash Screens
-          npx @capacitor/assets generate --android --icon public/logo.png --splash public/logo.png
+          npx @capacitor/assets generate --android
           
           npx cap sync android
 
