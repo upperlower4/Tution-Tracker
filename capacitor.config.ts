@@ -1,8 +1,8 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.tuitiontracker.app',
-  appName: 'TuitionTracker',
+  appId: 'com.joymkrishna.tutionpro.app',
+  appName: 'Tution Pro',
   webDir: 'dist',
   server: {
     androidScheme: 'https'

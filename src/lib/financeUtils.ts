@@ -4,32 +4,37 @@ import { Student, Payment } from '../types';
 export const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export const calculateBillingMonths = (student: Student) => {
-  const joinDate = startOfMonth(parseISO(student.joinDate));
-  const today = startOfMonth(new Date());
+  const joinDate = parseISO(student.joinDate);
+  const today = new Date();
   
   // If student is archived, we stop calculating dues at the archived date
   const endDate = student.status === 'inactive' && student.archivedDate 
-    ? startOfMonth(parseISO(student.archivedDate)) 
+    ? parseISO(student.archivedDate) 
     : today;
   
+  // Calculate full months completed based on the actual day of joining
+  // e.g., Feb 7 to March 6 is 0 months, March 7 is 1 month.
+  const monthsCompleted = differenceInMonths(endDate, joinDate);
+  
   const dueMonths = [];
-  let currentMonth = joinDate;
-
-  // Loop through each month from joinDate until the end date (inclusive)
-  // This ensures the current month is counted as a due month.
-  while (currentMonth <= endDate) {
-    dueMonths.push(new Date(currentMonth));
-    currentMonth = addMonths(currentMonth, 1);
+  let monthCursor = startOfMonth(joinDate);
+  for (let i = 0; i < monthsCompleted; i++) {
+    dueMonths.push(new Date(monthCursor));
+    monthCursor = addMonths(monthCursor, 1);
   }
   
-  // We also want to provide the current and next months in the dropdown for advance payments
-  const allMonths = [...dueMonths];
-  let nextToPay = allMonths.length > 0 ? addMonths(allMonths[allMonths.length - 1], 1) : joinDate;
+  // allMonths provides options for payment (including current and next month for advance)
+  const allMonths = [];
+  let allMonthCursor = startOfMonth(joinDate);
   
-  // Add months until we cover at least one month ahead of today for advance payment options
-  while (nextToPay <= addMonths(today, 1)) {
-    allMonths.push(new Date(nextToPay));
-    nextToPay = addMonths(nextToPay, 1);
+  // For inactive students, we only show months up to their archive date
+  const lastMonthToShow = student.status === 'inactive' && student.archivedDate
+    ? startOfMonth(parseISO(student.archivedDate))
+    : addMonths(startOfMonth(today), 1);
+  
+  while (allMonthCursor <= lastMonthToShow) {
+    allMonths.push(new Date(allMonthCursor));
+    allMonthCursor = addMonths(allMonthCursor, 1);
   }
 
   return { dueMonths, allMonths };

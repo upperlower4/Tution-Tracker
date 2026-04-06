@@ -40,9 +40,18 @@ const Badge = ({ children, variant = 'default', className }: { children: React.R
 };
 
 const AppLogo = ({ size = 20, className = "" }: { size?: number; className?: string }) => (
-  <div className={cn("relative flex items-center justify-center", className)}>
-    <img src="/logo.png" alt="Tution Pro" className="w-full h-full object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).nextElementSibling?.removeAttribute('style'); }} />
-    <GraduationCap size={size} className="absolute hidden text-white" style={{ display: 'none' }} />
+  <div className={cn("relative flex items-center justify-center bg-indigo-600 rounded-xl overflow-hidden shadow-sm", className)}>
+    <img 
+      src="/logo.png" 
+      alt="Tution Pro" 
+      className="w-full h-full object-contain p-1" 
+      onError={(e) => { 
+        (e.target as HTMLImageElement).style.display = 'none'; 
+        const next = (e.target as HTMLImageElement).nextElementSibling;
+        if (next) (next as HTMLElement).style.display = 'block';
+      }} 
+    />
+    <GraduationCap size={size} className="text-white" style={{ display: 'none' }} />
   </div>
 );
 
@@ -226,6 +235,8 @@ export default function App() {
   const [showTransactionDetail, setShowTransactionDetail] = useState(false);
   const [showEditPayment, setShowEditPayment] = useState(false);
   const [showDeletePayment, setShowDeletePayment] = useState(false);
+  const [showPaymentConfirm, setShowPaymentConfirm] = useState(false);
+  const [pendingPayment, setPendingPayment] = useState<{ studentId: string; amount: number; month: string; note: string } | null>(null);
   const [editPaymentForm, setEditPaymentForm] = useState({ amountPaid: '', month: '', note: '' });
 
   // ─── Theme & Notifications ────────────────────────────────────────
@@ -235,6 +246,7 @@ export default function App() {
 
   // ─── Refs ─────────────────────────────────────────────────────────
   const backPressRef = useRef(false);
+  const paymentFormRef = useRef<HTMLFormElement>(null);
 
   // ─── Dark Mode ────────────────────────────────────────────────────
   useEffect(() => {
@@ -522,6 +534,18 @@ export default function App() {
     setShowDeletePayment(false);
     setShowTransactionDetail(false);
     setSelectedPayment(null);
+  };
+
+  const handleConfirmPayment = () => {
+    if (!pendingPayment) return;
+    setIsSubmitting(true);
+    addPayment(pendingPayment.studentId, pendingPayment.amount, pendingPayment.month, pendingPayment.note);
+    setPendingPayment(null);
+    setShowPaymentConfirm(false);
+    setIsSubmitting(false);
+    if (paymentFormRef.current) {
+      paymentFormRef.current.reset();
+    }
   };
 
   // Recent transactions across all students
@@ -842,15 +866,15 @@ export default function App() {
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Phone Number</label>
-                      <input type="tel" value={studentForm.phone} onChange={e => setStudentForm(p => ({ ...p, phone: e.target.value }))} placeholder="017XXXXXXXX" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold placeholder:text-gray-400 dark:text-gray-100" />
+                      <input type="tel" value={studentForm.phone} onChange={e => setStudentForm(p => ({ ...p, phone: e.target.value.replace(/[^\d+]/g, '') }))} placeholder="017XXXXXXXX" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold placeholder:text-gray-400 dark:text-gray-100" />
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">WhatsApp Number</label>
-                      <input type="tel" value={studentForm.whatsapp} onChange={e => setStudentForm(p => ({ ...p, whatsapp: e.target.value }))} placeholder="880171XXXXXXX" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold placeholder:text-gray-400 dark:text-gray-100" />
+                      <input type="tel" value={studentForm.whatsapp} onChange={e => setStudentForm(p => ({ ...p, whatsapp: e.target.value.replace(/[^\d+]/g, '') }))} placeholder="880171XXXXXXX" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold placeholder:text-gray-400 dark:text-gray-100" />
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Additional Notes</label>
-                      <textarea value={studentForm.additionalInfo} onChange={e => setStudentForm(p => ({ ...p, additionalInfo: e.target.value }))} rows={3} placeholder="Any special notes..." className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold placeholder:text-gray-400 resize-none dark:text-gray-100" />
+                      <textarea value={studentForm.additionalInfo} onChange={e => setStudentForm(p => ({ ...p, additionalInfo: e.target.value }))} rows={5} placeholder="Any special notes..." className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-2xl p-4 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold placeholder:text-gray-400 resize-none dark:text-gray-100" />
                     </div>
                   </motion.div>
                 )}
@@ -930,14 +954,20 @@ export default function App() {
                   <CreditCard size={16} className="text-indigo-600 dark:text-indigo-400" />
                   <h3 className="font-black text-sm dark:text-gray-100">Record Payment</h3>
                 </div>
-                <form onSubmit={(e) => {
+                <form ref={paymentFormRef} onSubmit={(e) => {
                   e.preventDefault();
                   if (isSubmitting) return;
-                  setIsSubmitting(true);
                   const fd = new FormData(e.currentTarget);
-                  addPayment(selectedStudent.id, Number(fd.get('amount')), fd.get('month') as string, fd.get('note') as string);
-                  e.currentTarget.reset();
-                  setIsSubmitting(false);
+                  const amount = Number(fd.get('amount'));
+                  if (amount <= 0) return;
+                  
+                  setPendingPayment({
+                    studentId: selectedStudent.id,
+                    amount,
+                    month: fd.get('month') as string,
+                    note: fd.get('note') as string
+                  });
+                  setShowPaymentConfirm(true);
                 }} className="grid grid-cols-2 gap-3">
                   <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Amount (৳)</label><input name="amount" type="number" required className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500/10 font-bold dark:text-gray-100" placeholder="0" /></div>
                   <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Month</label>
@@ -945,7 +975,7 @@ export default function App() {
                       {getStudentFinancials(selectedStudent).billingMonths.map((d, i) => <option key={i} value={d.toISOString()}>{format(d, 'MMM yyyy')}</option>)}
                     </select>
                   </div>
-                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Note</label><input name="note" className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl p-3 outline-none font-bold dark:text-gray-100" placeholder="Optional" /></div>
+                  <div className="space-y-1"><label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Note</label><textarea name="note" rows={2} className="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl p-3 outline-none font-bold dark:text-gray-100 resize-none" placeholder="Optional" /></div>
                   <div className="flex items-end"><button type="submit" disabled={isSubmitting} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-black text-sm hover:bg-indigo-700 transition-all active:scale-[0.97] flex items-center justify-center gap-1.5 disabled:opacity-50"><Check size={16} />{isSubmitting ? '...' : 'Pay'}</button></div>
                 </form>
               </div>
@@ -1435,6 +1465,25 @@ export default function App() {
               <div className="grid grid-cols-2 gap-3">
                 <button onClick={() => setShowEditPayment(false)} className="py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
                 <button disabled={isSubmitting} onClick={() => { if (isSubmitting) return; setIsSubmitting(true); handleSaveEditPayment(); setIsSubmitting(false); }} className="py-3.5 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest disabled:opacity-50">Save</button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* ─── Payment Confirmation Modal ─── */}
+      <AnimatePresence>
+        {showPaymentConfirm && pendingPayment && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowPaymentConfirm(false)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100]" />
+            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90%] max-w-sm bg-white dark:bg-gray-900 rounded-[2rem] p-7 z-[110] shadow-2xl border border-gray-100 dark:border-gray-800 text-center">
+              <div className="w-14 h-14 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 rounded-2xl flex items-center justify-center mb-4 mx-auto"><CreditCard size={26} /></div>
+              <h3 className="text-xl font-black mb-2 dark:text-gray-100">Confirm Payment?</h3>
+              <p className="text-gray-400 text-sm font-medium mb-6">Are you sure you want to record a payment of <span className="text-indigo-600 dark:text-indigo-400 font-black">৳{pendingPayment.amount.toLocaleString()}</span>?</p>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setShowPaymentConfirm(false)} className="py-3.5 bg-gray-50 dark:bg-gray-800 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
+                <button disabled={isSubmitting} onClick={handleConfirmPayment} className="py-3.5 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest disabled:opacity-50">Confirm</button>
               </div>
             </motion.div>
           </>
