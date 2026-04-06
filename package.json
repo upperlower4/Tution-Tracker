@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "generate:assets": "npx @capacitor/assets generate --android --iconSource public/logo.png --splashSource public/logo.png",
+    "generate:assets": "npx @capacitor/assets generate --android --icon public/logo.png --splash public/logo.png",
     "build:android": "vite build && npm run generate:assets && cap sync android",
     "open:android": "cap open android"
   },
